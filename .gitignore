@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Generated validation reports and rollout artifacts.
+rollback_restore_report*.json
+*_report.json
+artifacts/
+*.mp4
+*.avi
+*.mov
+*.npz
+*.ppm
+*.pkl
+*.pickle
