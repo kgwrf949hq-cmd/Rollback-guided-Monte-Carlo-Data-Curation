@@ -49,6 +49,7 @@ def main() -> None:
     actions_by_step = {}
     failure_step = 18
     replay_end = 23
+    failure_state_checkpoint = None
 
     try:
         selector.maybe_capture(env, 0, obs, info={"phase": "initial"})
@@ -74,6 +75,18 @@ def main() -> None:
                 rng=action_rng,
                 metadata=env_info,
             )
+            if step == failure_step:
+                # Test fixture only: this state is deliberately not added to
+                # selector.keyframes.  It lets the test produce the reference
+                # continuation first and then place the simulator back at the
+                # exact failure boundary before injecting bad actions.
+                failure_state_checkpoint = selector.tool.capture(
+                    env,
+                    step=step,
+                    obs=obs,
+                    rng=action_rng,
+                    metadata={"checkpoint_kind": "validation_fixture"},
+                )
             if done:
                 raise RuntimeError(
                     "LIBERO terminated before the validation horizon; "
@@ -83,6 +96,14 @@ def main() -> None:
         selected = selector.select_for_rollback(failure_step)
         if selected.step >= failure_step:
             raise AssertionError("rollback selector returned a checkpoint at/after failure")
+        if failure_state_checkpoint is None:
+            raise AssertionError("failure-state validation fixture was not captured")
+
+        fixture_restore_report = selector.tool.restore(
+            env,
+            failure_state_checkpoint,
+            rng=action_rng,
+        )
 
         # Move the simulator into a deliberately bad branch.  The branch is
         # not evaluated for task quality; it only proves that restore removes
@@ -143,6 +164,7 @@ def main() -> None:
             "keyframe_summary": selector.summary(),
             "failure_step": failure_step,
             "selected_keyframe": selected.to_summary(),
+            "failure_fixture_restore_report": fixture_restore_report,
             "restore_report": restore_report,
             "initial_restore_report": initial_report,
             "bad_branch_steps": len(bad_branch_trace),

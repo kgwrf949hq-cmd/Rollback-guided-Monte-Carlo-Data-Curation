@@ -43,6 +43,7 @@ replay actions or query pi0.5 again
 - 保存并恢复 model 基础数组及编译派生常量，调用 `mj_setConst` 重建 MuJoCo model 常量。
 - 默认原地恢复，避免重新加载 XML 导致 controller、gripper、history buffer 和 observable cache 被重置；需要跨环境恢复时可显式使用 `reload_xml=True`。
 - 校验模型 XML SHA-256，防止把 checkpoint 恢复到不兼容的模型。
+- 对 MuJoCo 恢复时自动注入的派生 `<statistic>` XML 节点做稳定化处理，支持同一环境连续多次回退。
 - 保存环境 `timestep`、`cur_time`、`done`、控制器/夹爪运行状态、observable cache 和采样时钟。
 - 保存 Python `random`、NumPy 全局 RNG、局部 `np.random.Generator`，保证随机动作 replay 可重复。
 - 可选保存 pi0.5 的 pending action chunk；rollout 中用 `--restore-action-plan` 选择恢复动作块，否则回退后重新请求策略。

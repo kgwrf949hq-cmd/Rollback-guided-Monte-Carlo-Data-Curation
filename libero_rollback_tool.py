@@ -24,6 +24,7 @@ import json
 import os
 import pickle
 import random
+import re
 import sys
 import time
 from pathlib import Path
@@ -300,7 +301,28 @@ def restore_integration_state(
 def model_xml_sha256(model_xml: Optional[str]) -> Optional[str]:
     if not model_xml:
         return None
-    return hashlib.sha256(model_xml.encode("utf-8")).hexdigest()
+    # ``mj_setConst`` may inject a derived ``<statistic>`` element into the
+    # XML returned by robosuite.  It describes the compiled model, not its
+    # identity, and therefore must not make a second restore look like a
+    # cross-model restore.  Keep the hash strict for all other XML content.
+    stable_xml = model_xml
+    if re.search(r"<statistic\b", stable_xml, flags=re.IGNORECASE):
+        # MuJoCo emits this as a standalone element surrounded by blank lines.
+        # Remove the whole injected block while retaining the original XML
+        # layout, so checkpoints made before this normalization remain valid.
+        stable_xml = re.sub(
+            r"\n[ \t]*\n[ \t]*<statistic\b[^>]*/>[ \t]*\n[ \t]*\n",
+            "\n\n",
+            stable_xml,
+            flags=re.IGNORECASE,
+        )
+        stable_xml = re.sub(
+            r"(?m)^[ \t]*<statistic\b[^>]*/>[ \t]*\r?\n?",
+            "",
+            stable_xml,
+            flags=re.IGNORECASE,
+        )
+    return hashlib.sha256(stable_xml.encode("utf-8")).hexdigest()
 
 
 def capture_rng_state(
