@@ -43,9 +43,12 @@ PYTHONPATH=. python validation/round1_norender_validation.py
 PYTHONPATH=. python validation/cross_env_validation.py
 MUJOCO_GL=osmesa CUDA_VISIBLE_DEVICES="" \
   PYTHONPATH=. python validation/cross_render_validation.py
+PYTHONPATH=. python validation/semantic_keyframe_rollback_validation.py
 ```
 
 第三个测试使用 OSMesa 软件渲染，不占用 CUDA；若服务器已正确配置 EGL，也可以改用 `MUJOCO_GL=egl` 进行短测试。
+
+最后一个测试会运行一段确定性 rollout，在每一步评估语义关键帧，故意执行 4 步大幅扰动，再回退到严格早于失败步的最近关键帧，并 replay 原始动作。报告中的 `selected_keyframe.step` 必须小于 `failure_step`，`replay_report.success` 必须为 `true`。
 
 ## 4. pi0.5 演示
 
@@ -55,6 +58,7 @@ MUJOCO_GL=osmesa CUDA_VISIBLE_DEVICES="" \
 PYTHONPATH=. python pi05_libero_rollback_rollout.py \
   --host 127.0.0.1 \
   --port 8000 \
+  --checkpoint-policy semantic \
   --video-output ./artifacts/pi05_rollback.mp4 \
   --output ./artifacts/pi05_rollback_report.json
 ```

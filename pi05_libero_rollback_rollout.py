@@ -36,6 +36,7 @@ from libero_rollback_tool import (
     step_env,
     write_video_or_frames,
 )
+from semantic_checkpoint import SemanticKeyframeConfig, SemanticKeyframeSelector
 from openpi_client import image_tools
 from openpi_client import websocket_client_policy
 
@@ -56,7 +57,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-steps-wait", type=int, default=10)
     parser.add_argument("--replan-steps", type=int, default=5)
     parser.add_argument("--max-steps", type=int, default=180)
+    parser.add_argument(
+        "--checkpoint-policy",
+        choices=["semantic", "periodic"],
+        default="semantic",
+        help="Select semantic keyframes or preserve the fixed-interval policy.",
+    )
     parser.add_argument("--checkpoint-interval", type=int, default=20)
+    parser.add_argument("--checkpoint-min-interval", type=int, default=3)
+    parser.add_argument("--checkpoint-max-interval", type=int, default=20)
+    parser.add_argument("--checkpoint-max-count", type=int, default=64)
+    parser.add_argument("--checkpoint-score-threshold", type=float, default=1.0)
     parser.add_argument("--demo-failure-step", type=int, default=70)
     parser.add_argument("--failure-branch-steps", type=int, default=18)
     parser.add_argument("--failure-action-mode", default="sweep", choices=["zero", "random", "sweep"])
@@ -201,6 +212,58 @@ def capture_checkpoint(
     return checkpoint
 
 
+def capture_semantic_checkpoint(
+    selector: SemanticKeyframeSelector,
+    env: Any,
+    step: int,
+    obs: Dict[str, Any],
+    reward: float,
+    done: bool,
+    info: Dict[str, Any],
+    checkpoint_steps: List[int],
+    metadata: Dict[str, Any],
+    *,
+    action: Optional[np.ndarray] = None,
+    rng: Optional[np.random.Generator] = None,
+    action_plan: Optional[Deque[np.ndarray]] = None,
+    policy_queries: int = 0,
+    restored_policy_steps: int = 0,
+) -> Optional[Any]:
+    """Evaluate one state and return its checkpoint only when selected."""
+
+    rollout_state = {
+        "action_plan": [
+            np.asarray(pending_action, dtype=np.float32).copy()
+            for pending_action in (action_plan or ())
+        ],
+        "policy_queries": int(policy_queries),
+        "restored_policy_steps": int(restored_policy_steps),
+        "policy_state": None,
+    }
+    keyframe = selector.maybe_capture(
+        env,
+        step,
+        obs,
+        reward,
+        done,
+        info,
+        action=action,
+        rng=rng,
+        rollout_state=rollout_state,
+        metadata=metadata,
+    )
+    if keyframe is None:
+        return None
+    checkpoint_steps.append(int(step))
+    logging.info(
+        "Captured semantic checkpoint at env step %s (%s, score=%.3f)",
+        step,
+        ",".join(keyframe.labels),
+        keyframe.score,
+    )
+    return keyframe.checkpoint
+
+
 def restore_action_plan(action_plan: Deque[np.ndarray], checkpoint: Any) -> bool:
     state = getattr(checkpoint, "rollout_state", None) or {}
     saved_actions = state.get("action_plan")
@@ -249,6 +312,7 @@ def run_demo(args: argparse.Namespace) -> Dict[str, Any]:
     policy_queries = 0
     restored_policy_steps = 0
     action_plan_restored = False
+    selected_keyframe_summary: Optional[Dict[str, Any]] = None
     latest_checkpoint = None
     action_plan: Deque[np.ndarray] = collections.deque()
 
@@ -264,6 +328,31 @@ def run_demo(args: argparse.Namespace) -> Dict[str, Any]:
         task_description = str(info.get("task_language") or "")
         client = websocket_client_policy.WebsocketClientPolicy(args.host, args.port)
         rollback = EnvRollbackTool()
+        semantic_selector = SemanticKeyframeSelector(
+            tool=rollback,
+            config=SemanticKeyframeConfig(
+                min_interval=args.checkpoint_min_interval,
+                max_interval=args.checkpoint_max_interval,
+                max_keyframes=args.checkpoint_max_count,
+                score_threshold=args.checkpoint_score_threshold,
+            ),
+        )
+        if args.checkpoint_policy == "semantic":
+            latest_checkpoint = capture_semantic_checkpoint(
+                semantic_selector,
+                env,
+                0,
+                obs,
+                0.0,
+                False,
+                {},
+                checkpoint_steps,
+                {"phase": "initial", "task_description": task_description},
+                rng=rng,
+                action_plan=action_plan,
+                policy_queries=policy_queries,
+                restored_policy_steps=restored_policy_steps,
+            )
 
         append_frame(
             frames,
@@ -279,10 +368,29 @@ def run_demo(args: argparse.Namespace) -> Dict[str, Any]:
             if t < args.num_steps_wait:
                 obs, _reward, done, _info = step_env(env, LIBERO_DUMMY_ACTION)
                 t += 1
+                if args.checkpoint_policy == "semantic":
+                    semantic_checkpoint = capture_semantic_checkpoint(
+                        semantic_selector,
+                        env,
+                        t,
+                        obs,
+                        _reward,
+                        done,
+                        _info,
+                        checkpoint_steps,
+                        {"phase": "settling", "task_description": task_description},
+                        action=np.asarray(LIBERO_DUMMY_ACTION, dtype=np.float32),
+                        rng=rng,
+                        action_plan=action_plan,
+                        policy_queries=policy_queries,
+                        restored_policy_steps=restored_policy_steps,
+                    )
+                    if semantic_checkpoint is not None:
+                        latest_checkpoint = semantic_checkpoint
                 append_frame(frames, obs, "settling objects", "env step %03d" % t, (88, 96, 112))
                 continue
 
-            should_checkpoint = (
+            should_checkpoint = args.checkpoint_policy == "periodic" and (
                 latest_checkpoint is None
                 or (t - args.num_steps_wait) % args.checkpoint_interval == 0
             )
@@ -314,6 +422,10 @@ def run_demo(args: argparse.Namespace) -> Dict[str, Any]:
                 and latest_checkpoint is not None
                 and t >= args.demo_failure_step
             ):
+                if args.checkpoint_policy == "semantic":
+                    selected_keyframe = semantic_selector.select_for_rollback(t + 1)
+                    latest_checkpoint = selected_keyframe.checkpoint
+                    selected_keyframe_summary = selected_keyframe.to_summary()
                 append_frame(
                     frames,
                     obs,
@@ -358,6 +470,8 @@ def run_demo(args: argparse.Namespace) -> Dict[str, Any]:
                 restored_obs = get_observation(env, force_update=False)
                 if restored_obs is None:
                     raise RuntimeError("Could not read observation after restore")
+                if args.checkpoint_policy == "semantic":
+                    semantic_selector.reset_history(restored_obs)
                 restore_validation = compare_checkpoint_to_env(
                     latest_checkpoint, env, restored_obs
                 )
@@ -397,6 +511,25 @@ def run_demo(args: argparse.Namespace) -> Dict[str, Any]:
             policy_queries += int(queried)
             obs, _reward, done, _info = step_env(env, action.tolist())
             t += 1
+            if args.checkpoint_policy == "semantic":
+                semantic_checkpoint = capture_semantic_checkpoint(
+                    semantic_selector,
+                    env,
+                    t,
+                    obs,
+                    _reward,
+                    done,
+                    _info,
+                    checkpoint_steps,
+                    {"phase": "policy_rollout", "task_description": task_description},
+                    action=action,
+                    rng=rng,
+                    action_plan=action_plan,
+                    policy_queries=policy_queries,
+                    restored_policy_steps=restored_policy_steps,
+                )
+                if semantic_checkpoint is not None:
+                    latest_checkpoint = semantic_checkpoint
             if rollback_done:
                 restored_policy_steps += 1
                 phase = "RESTORED PI0.5 ROLLOUT"
@@ -433,8 +566,15 @@ def run_demo(args: argparse.Namespace) -> Dict[str, Any]:
             "task_done": bool(done),
             "rollback_performed": bool(rollback_done),
             "rollback_trigger": "demo_failure_step",
+            "checkpoint_policy": args.checkpoint_policy,
             "checkpoint_interval": args.checkpoint_interval,
             "checkpoint_steps": checkpoint_steps,
+            "semantic_keyframes": (
+                semantic_selector.summary()
+                if args.checkpoint_policy == "semantic"
+                else None
+            ),
+            "selected_keyframe": selected_keyframe_summary,
             "restore_report": restore_report,
             "restore_validation": restore_validation,
             "final_env_step": int(t),
