@@ -238,6 +238,29 @@ class SemanticKeyframeSelector:
         self._previous_progress = None
         self._last_decision = None
 
+    def observe_only(
+        self,
+        env: Any,
+        step: int,
+        obs: Optional[Mapping[str, Any]],
+        reward: float = 0.0,
+        done: bool = False,
+        info: Optional[Mapping[str, Any]] = None,
+    ) -> KeyframeDecision:
+        """Advance feature history without allowing a heuristic capture.
+
+        Risk-aware policies use this on low-risk event edges and then reserve
+        checkpoint creation for explicit sub-event transitions or max-interval
+        fallbacks.
+        """
+
+        decision = self.evaluate(
+            env, step=step, obs=obs, reward=reward, done=done, info=info
+        )
+        self._previous_obs = copy_obs(obs)
+        self._previous_reward = float(reward)
+        return decision
+
     def _success_signal(self, env: Any, info: Optional[Mapping[str, Any]]) -> bool:
         success = _scalar_from_mapping(info, ("success", "is_success", "task_success"))
         if success is not None and bool(success):
@@ -464,6 +487,58 @@ class SemanticKeyframeSelector:
         self._previous_obs = copy_obs(obs)
         self._previous_reward = float(reward)
         return self.last_keyframe if self.last_keyframe and self.last_keyframe.step == int(step) else None
+
+    def force_capture(
+        self,
+        env: Any,
+        step: int,
+        obs: Optional[Mapping[str, Any]],
+        *,
+        labels: Sequence[str],
+        score: float = 0.0,
+        features: Optional[Mapping[str, float]] = None,
+        reward: float = 0.0,
+        done: bool = False,
+        action: Optional[np.ndarray] = None,
+        rng: Optional[np.random.Generator] = None,
+        rollout_state: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> SemanticKeyframe:
+        """Capture a mandatory event checkpoint regardless of score/cooldown."""
+
+        capture_metadata: Dict[str, Any] = dict(metadata or {})
+        capture_metadata.update(
+            {
+                "checkpoint_kind": "semantic_event_keyframe",
+                "semantic_score": float(score),
+                "semantic_labels": list(labels),
+                "semantic_features": dict(features or {}),
+                "reward_at_capture": float(reward),
+                "done_at_capture": bool(done),
+            }
+        )
+        if action is not None:
+            capture_metadata["action_at_capture"] = np.asarray(action).tolist()
+        checkpoint = self.tool.capture(
+            env,
+            step=int(step),
+            obs=dict(obs) if isinstance(obs, Mapping) else None,
+            metadata=capture_metadata,
+            rng=rng,
+            rollout_state=rollout_state,
+        )
+        keyframe = SemanticKeyframe(
+            checkpoint=checkpoint,
+            step=int(step),
+            score=float(score),
+            labels=tuple(dict.fromkeys(labels)),
+            features={key: float(value) for key, value in (features or {}).items()},
+        )
+        self.keyframes.append(keyframe)
+        self._enforce_memory_budget()
+        self._previous_obs = copy_obs(obs)
+        self._previous_reward = float(reward)
+        return keyframe
 
     def _enforce_memory_budget(self) -> None:
         """Bound full-state memory while retaining episode boundaries."""

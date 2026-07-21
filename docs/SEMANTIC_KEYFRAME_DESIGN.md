@@ -127,3 +127,35 @@ keyframe, restore_report = selector.restore_for_failure(
 - 先用验证脚本观察 `keyframe_summary` 的 label 分布，再在多任务数据上统计 checkpoint 数量、恢复成功率和平均回退距离。
 
 当前算法是可解释的启发式基线，不替代最终的 learned failure detector。后续蒙特卡洛数据构造可以把关键帧作为分支节点，对每个节点采样多个动作后按任务成功、进度和安全性评分，保留成功分支及其关键帧元数据。
+
+## 6. Pick-and-place 第一版
+
+`pick_place_checkpoint.py` 将上述策略具体化为五个有序子事件：
+
+```text
+approach_object
+      ↓
+grasp_completed
+      ↓
+object_lifted
+      ↓
+place_completed
+      ↓
+release_completed
+```
+
+人工只需为任务实例绑定 `target_object` 和 `goal_object`，并按需要调整距离、高度、夹爪开合和稳定步数阈值。检测器使用物体位置、物体到末端的相对位置、夹爪 aperture、物体高度和物体运动稳定性；也支持通过 `info["<event>_completed"]` 接入更可靠的环境或任务判定。
+
+人工配置放在 `configs/pick_place/*.json`，可以同时设置任务阈值和下列事件边策略；`load_pick_place_config()` 负责校验顺序并加载，不需要为每个 LIBERO task 改 Python 源码。
+
+每条事件边都有独立 `EventEdgePolicy`：
+
+```text
+start → approach       risk=0.15, heuristic=off, max_interval=30
+approach → grasp       risk=1.00, heuristic=on,  max_interval=6
+grasp → lifted         risk=0.90, heuristic=on,  max_interval=7
+lifted → placed        risk=0.45, heuristic=on,  max_interval=15
+placed → released      risk=1.00, heuristic=on,  max_interval=5
+```
+
+事件完成点总是强制保存；低风险接近边不使用运动分数，只按最大间隔兜底；高风险边通过风险系数降低分数阈值并缩短最大间隔。这样可以把 checkpoint 预算集中到抓取、抬升、放置和释放等真正容易失败的阶段。

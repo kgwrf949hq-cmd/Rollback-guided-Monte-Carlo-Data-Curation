@@ -37,6 +37,11 @@ from libero_rollback_tool import (
     write_video_or_frames,
 )
 from semantic_checkpoint import SemanticKeyframeConfig, SemanticKeyframeSelector
+from pick_place_checkpoint import (
+    PickPlaceRiskAwareCheckpointManager,
+    PickPlaceTaskSpec,
+    load_pick_place_config,
+)
 from openpi_client import image_tools
 from openpi_client import websocket_client_policy
 
@@ -59,15 +64,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, default=180)
     parser.add_argument(
         "--checkpoint-policy",
-        choices=["semantic", "periodic"],
+        choices=["semantic", "pick_place", "periodic"],
         default="semantic",
-        help="Select semantic keyframes or preserve the fixed-interval policy.",
+        help="Select generic semantic, pick-place event, or fixed-interval checkpoints.",
     )
     parser.add_argument("--checkpoint-interval", type=int, default=20)
     parser.add_argument("--checkpoint-min-interval", type=int, default=3)
     parser.add_argument("--checkpoint-max-interval", type=int, default=20)
     parser.add_argument("--checkpoint-max-count", type=int, default=64)
     parser.add_argument("--checkpoint-score-threshold", type=float, default=1.0)
+    parser.add_argument("--target-object", default="")
+    parser.add_argument("--goal-object", default="")
+    parser.add_argument("--pick-place-config", default="")
     parser.add_argument("--demo-failure-step", type=int, default=70)
     parser.add_argument("--failure-branch-steps", type=int, default=18)
     parser.add_argument("--failure-action-mode", default="sweep", choices=["zero", "random", "sweep"])
@@ -264,6 +272,58 @@ def capture_semantic_checkpoint(
     return keyframe.checkpoint
 
 
+def capture_pick_place_checkpoint(
+    manager: PickPlaceRiskAwareCheckpointManager,
+    env: Any,
+    step: int,
+    obs: Dict[str, Any],
+    reward: float,
+    done: bool,
+    info: Dict[str, Any],
+    checkpoint_steps: List[int],
+    metadata: Dict[str, Any],
+    *,
+    action: Optional[np.ndarray] = None,
+    rng: Optional[np.random.Generator] = None,
+    action_plan: Optional[Deque[np.ndarray]] = None,
+    policy_queries: int = 0,
+    restored_policy_steps: int = 0,
+) -> Optional[Any]:
+    rollout_state = {
+        "action_plan": [
+            np.asarray(pending_action, dtype=np.float32).copy()
+            for pending_action in (action_plan or ())
+        ],
+        "policy_queries": int(policy_queries),
+        "restored_policy_steps": int(restored_policy_steps),
+        "policy_state": None,
+    }
+    observation = manager.observe(
+        env,
+        step,
+        obs,
+        reward,
+        done,
+        info,
+        action=action,
+        rng=rng,
+        rollout_state=rollout_state,
+        metadata=metadata,
+    )
+    if observation.keyframe is None:
+        return None
+    keyframe = observation.keyframe
+    checkpoint_steps.append(int(step))
+    logging.info(
+        "Captured pick-place checkpoint at env step %s (%s, edge=%s, risk=%.2f)",
+        step,
+        ",".join(keyframe.labels),
+        observation.edge_policy.name,
+        observation.edge_policy.risk_coefficient,
+    )
+    return keyframe.checkpoint
+
+
 def restore_action_plan(action_plan: Deque[np.ndarray], checkpoint: Any) -> bool:
     state = getattr(checkpoint, "rollout_state", None) or {}
     saved_actions = state.get("action_plan")
@@ -314,6 +374,7 @@ def run_demo(args: argparse.Namespace) -> Dict[str, Any]:
     action_plan_restored = False
     selected_keyframe_summary: Optional[Dict[str, Any]] = None
     latest_checkpoint = None
+    pick_place_manager: Optional[PickPlaceRiskAwareCheckpointManager] = None
     action_plan: Deque[np.ndarray] = collections.deque()
 
     try:
@@ -337,9 +398,47 @@ def run_demo(args: argparse.Namespace) -> Dict[str, Any]:
                 score_threshold=args.checkpoint_score_threshold,
             ),
         )
+        if args.checkpoint_policy == "pick_place":
+            if args.pick_place_config:
+                pick_place_spec, pick_place_policies = load_pick_place_config(
+                    pathlib.Path(args.pick_place_config)
+                )
+            else:
+                if not args.target_object or not args.goal_object:
+                    raise ValueError(
+                        "--checkpoint-policy pick_place requires either "
+                        "--pick-place-config or both --target-object and --goal-object"
+                    )
+                pick_place_spec = PickPlaceTaskSpec(
+                    target_object=args.target_object,
+                    goal_object=args.goal_object,
+                )
+                pick_place_policies = None
+            pick_place_manager = PickPlaceRiskAwareCheckpointManager(
+                pick_place_spec,
+                tool=rollback,
+                selector_config=semantic_selector.config,
+                edge_policies=pick_place_policies,
+            )
         if args.checkpoint_policy == "semantic":
             latest_checkpoint = capture_semantic_checkpoint(
                 semantic_selector,
+                env,
+                0,
+                obs,
+                0.0,
+                False,
+                {},
+                checkpoint_steps,
+                {"phase": "initial", "task_description": task_description},
+                rng=rng,
+                action_plan=action_plan,
+                policy_queries=policy_queries,
+                restored_policy_steps=restored_policy_steps,
+            )
+        elif args.checkpoint_policy == "pick_place":
+            latest_checkpoint = capture_pick_place_checkpoint(
+                pick_place_manager,
                 env,
                 0,
                 obs,
@@ -387,6 +486,25 @@ def run_demo(args: argparse.Namespace) -> Dict[str, Any]:
                     )
                     if semantic_checkpoint is not None:
                         latest_checkpoint = semantic_checkpoint
+                elif args.checkpoint_policy == "pick_place":
+                    pick_place_checkpoint = capture_pick_place_checkpoint(
+                        pick_place_manager,
+                        env,
+                        t,
+                        obs,
+                        _reward,
+                        done,
+                        _info,
+                        checkpoint_steps,
+                        {"phase": "settling", "task_description": task_description},
+                        action=np.asarray(LIBERO_DUMMY_ACTION, dtype=np.float32),
+                        rng=rng,
+                        action_plan=action_plan,
+                        policy_queries=policy_queries,
+                        restored_policy_steps=restored_policy_steps,
+                    )
+                    if pick_place_checkpoint is not None:
+                        latest_checkpoint = pick_place_checkpoint
                 append_frame(frames, obs, "settling objects", "env step %03d" % t, (88, 96, 112))
                 continue
 
@@ -424,6 +542,12 @@ def run_demo(args: argparse.Namespace) -> Dict[str, Any]:
             ):
                 if args.checkpoint_policy == "semantic":
                     selected_keyframe = semantic_selector.select_for_rollback(t + 1)
+                    latest_checkpoint = selected_keyframe.checkpoint
+                    selected_keyframe_summary = selected_keyframe.to_summary()
+                elif args.checkpoint_policy == "pick_place":
+                    selected_keyframe = pick_place_manager.selector.select_for_rollback(
+                        t + 1
+                    )
                     latest_checkpoint = selected_keyframe.checkpoint
                     selected_keyframe_summary = selected_keyframe.to_summary()
                 append_frame(
@@ -466,7 +590,13 @@ def run_demo(args: argparse.Namespace) -> Dict[str, Any]:
                     (218, 131, 44),
                     repeats=args.hold_frames,
                 )
-                restore_report = rollback.restore(env, latest_checkpoint, rng=rng)
+                if args.checkpoint_policy == "pick_place":
+                    selected_keyframe, restore_report = (
+                        pick_place_manager.restore_for_failure(env, t + 1, rng=rng)
+                    )
+                    latest_checkpoint = selected_keyframe.checkpoint
+                else:
+                    restore_report = rollback.restore(env, latest_checkpoint, rng=rng)
                 restored_obs = get_observation(env, force_update=False)
                 if restored_obs is None:
                     raise RuntimeError("Could not read observation after restore")
@@ -530,6 +660,25 @@ def run_demo(args: argparse.Namespace) -> Dict[str, Any]:
                 )
                 if semantic_checkpoint is not None:
                     latest_checkpoint = semantic_checkpoint
+            elif args.checkpoint_policy == "pick_place":
+                pick_place_checkpoint = capture_pick_place_checkpoint(
+                    pick_place_manager,
+                    env,
+                    t,
+                    obs,
+                    _reward,
+                    done,
+                    _info,
+                    checkpoint_steps,
+                    {"phase": "policy_rollout", "task_description": task_description},
+                    action=action,
+                    rng=rng,
+                    action_plan=action_plan,
+                    policy_queries=policy_queries,
+                    restored_policy_steps=restored_policy_steps,
+                )
+                if pick_place_checkpoint is not None:
+                    latest_checkpoint = pick_place_checkpoint
             if rollback_done:
                 restored_policy_steps += 1
                 phase = "RESTORED PI0.5 ROLLOUT"
@@ -572,6 +721,11 @@ def run_demo(args: argparse.Namespace) -> Dict[str, Any]:
             "semantic_keyframes": (
                 semantic_selector.summary()
                 if args.checkpoint_policy == "semantic"
+                else None
+            ),
+            "pick_place_checkpoints": (
+                pick_place_manager.summary()
+                if args.checkpoint_policy == "pick_place"
                 else None
             ),
             "selected_keyframe": selected_keyframe_summary,

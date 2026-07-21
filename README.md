@@ -48,6 +48,8 @@ replay actions or query pi0.5 again
 - 保存 Python `random`、NumPy 全局 RNG、局部 `np.random.Generator`，保证随机动作 replay 可重复。
 - 可选保存 pi0.5 的 pending action chunk；rollout 中用 `--restore-action-plan` 选择恢复动作块，否则回退后重新请求策略。
 - 提供无渲染、跨环境和双相机渲染验证脚本。
+- 提供 pick-and-place 子事件状态机：`approach_object`、`grasp_completed`、`object_lifted`、`place_completed`、`release_completed`。
+- 子事件完成点强制保存；每条子事件边独立配置风险系数、启发式开关和 checkpoint 间隔。
 
 ## 语义关键帧选择
 
@@ -76,6 +78,27 @@ keyframe, report = selector.restore_for_failure(env, failure_step=step)
 ```
 
 该选择器只负责“保存哪些状态”和“回退到哪个状态”，不绑定具体失败检测器。后续可直接把碰撞检测、任务进度模型或 learned failure score 接入 `info`，再调整 `SemanticKeyframeConfig` 的阈值。
+
+## Pick-and-place 子事件与风险策略
+
+`pick_place_checkpoint.py` 在现有 selector 上增加任务语义层。人工配置目标物体和目标区域，程序根据 LIBERO observation 自动判断事件完成：
+
+```python
+from pick_place_checkpoint import (
+    PickPlaceRiskAwareCheckpointManager,
+    PickPlaceTaskSpec,
+)
+
+manager = PickPlaceRiskAwareCheckpointManager(
+    PickPlaceTaskSpec(
+        target_object="akita_black_bowl_1",
+        goal_object="plate_1",
+    )
+)
+manager.observe(env, step, obs, reward, done, info, action=action)
+```
+
+默认风险策略会让接近物体阶段保持稀疏，仅保留起点、事件完成点和最大间隔点；抓取、抬升、放置和释放边启用更密集的启发式 checkpoint。策略不是按动作位移大小直接保存，而是由当前子事件边的 `risk_coefficient` 调整分数阈值和最大间隔。
 
 ## 环境要求
 
@@ -119,6 +142,9 @@ PYTHONPATH=. python validation/cross_env_validation.py
 
 # 语义关键帧保存、故意失败分支、回退和确定性 replay
 PYTHONPATH=. python validation/semantic_keyframe_rollback_validation.py
+
+# pick-and-place 子事件、风险边策略和回退 replay
+PYTHONPATH=. python validation/pick_place_checkpoint_validation.py
 ```
 
 验证报告可通过 `--output report.json` 保存；视频和渲染不可用时，工具会自动回退为 PPM 帧和 NPZ 文件。
@@ -144,6 +170,16 @@ PYTHONPATH=. python pi05_libero_rollback_rollout.py \
 --restore-action-plan
 ```
 
+Pick-and-place 任务可启用事件风险策略：
+
+```bash
+PYTHONPATH=. python pi05_libero_rollback_rollout.py \
+  --checkpoint-policy pick_place \
+  --pick-place-config configs/pick_place/libero_spatial_task0.json
+```
+
+也可以不使用配置文件，直接传入 `--target-object akita_black_bowl_1 --goal-object plate_1`。JSON 配置把人工定义的物体绑定、事件阈值和每条事件边的风险系数集中保存，新增同类任务时不需要修改 Python 代码。
+
 该脚本中的失败分支是用于演示 rollback 的可控扰动，不代表最终的失败检测器。实际研究流程应将 `demo_failure_step` 替换为任务成功判定、碰撞/越界检测或 learned failure detector，并在其上实现 checkpoint 选择策略。
 
 ## 设计边界
@@ -163,6 +199,7 @@ PYTHONPATH=. python pi05_libero_rollback_rollout.py \
 - 跨环境无渲染恢复：model state、integration state、runtime state、RNG 和 6 步 replay 通过；
 - OSMesa 双相机原地及跨环境恢复：初始图像和 replay 图像最大绝对差均为 `0.0`；
 - 语义关键帧端到端测试：生成 5 个关键帧（0、2、4、12、20），在失败步 18 选择第 12 步关键帧，执行 4 步扰动后恢复，11 步 replay 全部一致；
+- pick-and-place 风险测试：5 个子事件按顺序完成，接近阶段无中间 checkpoint，抓取阶段出现风险间隔 checkpoint，选择失败前关键帧后 16 步 replay 通过；
 - `py_compile`、pi0.5 CLI help 及 action-plan 恢复单元检查通过。
 
 CUDA/EGL 渲染不是上述验证的必要条件；共享 GPU 忙碌时建议使用 OSMesa，避免影响其他任务。
@@ -173,11 +210,14 @@ CUDA/EGL 渲染不是上述验证的必要条件；共享 GPU 忙碌时建议使
 | --- | --- |
 | `libero_rollback_tool.py` | checkpoint 数据结构、捕获/恢复、比较和验证 CLI |
 | `semantic_checkpoint.py` | 语义关键帧检测、checkpoint 密度控制和回退点选择 |
+| `pick_place_checkpoint.py` | pick-and-place 子事件状态机和风险边 checkpoint 管理器 |
+| `configs/pick_place/*.json` | 人工定义的目标物体、目标区域、事件阈值和风险边配置 |
 | `pi05_libero_rollback_rollout.py` | pi0.5 policy rollout 与 rollback 演示 |
 | `validation/round1_norender_validation.py` | 原地无渲染确定性 replay |
 | `validation/cross_env_validation.py` | 新建环境后的 XML/model/runtime/RNG 恢复 |
 | `validation/cross_render_validation.py` | 双相机渲染一致性验证 |
 | `validation/semantic_keyframe_rollback_validation.py` | 关键帧选择到回退 replay 的端到端验证 |
+| `validation/pick_place_checkpoint_validation.py` | pick-and-place 子事件、风险密度和回退 replay 验证 |
 | `docs/REMOTE_TEST_STEPS.md` | 远程服务器运行说明与故障排查 |
 | `docs/SEMANTIC_KEYFRAME_DESIGN.md` | 需求、评分、选择策略和参数调节说明 |
 

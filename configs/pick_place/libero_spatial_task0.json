@@ -1,0 +1,57 @@
+{
+  "task": {
+    "target_object": "akita_black_bowl_1",
+    "goal_object": "plate_1",
+    "approach_distance": 0.08,
+    "grasp_distance": 0.06,
+    "gripper_closed_aperture": 0.018,
+    "gripper_open_aperture": 0.032,
+    "lift_height": 0.04,
+    "place_distance": 0.1,
+    "place_height_tolerance": 0.08,
+    "stable_object_motion": 0.008,
+    "confirmation_steps": 2
+  },
+  "edge_policies": [
+    {
+      "from_event": null,
+      "to_event": "approach_object",
+      "risk_coefficient": 0.15,
+      "heuristic_enabled": false,
+      "min_interval": 8,
+      "max_interval": 30
+    },
+    {
+      "from_event": "approach_object",
+      "to_event": "grasp_completed",
+      "risk_coefficient": 1.0,
+      "heuristic_enabled": true,
+      "min_interval": 2,
+      "max_interval": 6
+    },
+    {
+      "from_event": "grasp_completed",
+      "to_event": "object_lifted",
+      "risk_coefficient": 0.9,
+      "heuristic_enabled": true,
+      "min_interval": 2,
+      "max_interval": 7
+    },
+    {
+      "from_event": "object_lifted",
+      "to_event": "place_completed",
+      "risk_coefficient": 0.45,
+      "heuristic_enabled": true,
+      "min_interval": 5,
+      "max_interval": 15
+    },
+    {
+      "from_event": "place_completed",
+      "to_event": "release_completed",
+      "risk_coefficient": 1.0,
+      "heuristic_enabled": true,
+      "min_interval": 2,
+      "max_interval": 5
+    }
+  ]
+}
