@@ -248,6 +248,7 @@ CUDA/EGL 渲染不是上述验证的必要条件；共享 GPU 忙碌时建议使
 | `docs/REMOTE_TEST_STEPS.md` | 远程服务器运行说明与故障排查 |
 | `docs/SEMANTIC_KEYFRAME_DESIGN.md` | 需求、评分、选择策略和参数调节说明 |
 | `docs/FAILURE_DETECTION.md` | 失败规则、输出语义、验证范围和未来风险融合公式 |
+| `docs/HANDOFF.md` | 三个流程、验证状态、服务器实时状态、限制和后续工作交接 |
 
 ## License
 
