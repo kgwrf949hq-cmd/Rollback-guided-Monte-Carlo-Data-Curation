@@ -45,6 +45,7 @@ MUJOCO_GL=osmesa CUDA_VISIBLE_DEVICES="" \
   PYTHONPATH=. python validation/cross_render_validation.py
 PYTHONPATH=. python validation/semantic_keyframe_rollback_validation.py
 PYTHONPATH=. python validation/pick_place_checkpoint_validation.py
+PYTHONPATH=. python validation/pick_place_failure_validation.py
 ```
 
 第三个测试使用 OSMesa 软件渲染，不占用 CUDA；若服务器已正确配置 EGL，也可以改用 `MUJOCO_GL=egl` 进行短测试。
@@ -52,6 +53,8 @@ PYTHONPATH=. python validation/pick_place_checkpoint_validation.py
 语义关键帧测试会运行一段确定性 rollout，在每一步评估语义关键帧，故意执行 4 步大幅扰动，再回退到严格早于失败步的最近关键帧，并 replay 原始动作。报告中的 `selected_keyframe.step` 必须小于 `failure_step`，`replay_report.success` 必须为 `true`。
 
 Pick-and-place 测试还会验证五个子事件的顺序、低风险接近阶段的稀疏 checkpoint、高风险抓取阶段的加密 checkpoint，以及风险系统选点后的确定性回退。
+
+失败检测测试只运行规则和真实 observation smoke，不调用 checkpoint、restore 或 replay。报告的 `scope` 必须为 `failure_detection_only_no_checkpoint_restore_or_replay`。
 
 ## 4. pi0.5 演示
 
