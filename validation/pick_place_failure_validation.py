@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from libero_rollback_tool import make_libero_env, step_env
-from pick_place_checkpoint import load_pick_place_config
+from pick_place_checkpoint import PickPlaceTaskTruth, load_pick_place_config
 from pick_place_failure import (
     FailureStatus,
     PickPlaceFailureConfig,
@@ -49,9 +49,33 @@ def compact_config(**changes):
     return dataclasses.replace(base, **changes)
 
 
-def run_case(detector, observations, completed_events, *, done=False, info=None):
+def make_truth(*, grasped=None, on_goal=None, contact=None, success=False):
+    return PickPlaceTaskTruth(
+        target_grasped=grasped,
+        target_goal_contact=contact,
+        target_on_goal=on_goal,
+        task_success=success,
+        bddl_goal_matches=True,
+        sources={"fixture": "synthetic_failure_rule_test"},
+    )
+
+
+def run_case(
+    detector,
+    observations,
+    completed_events,
+    *,
+    done=False,
+    info=None,
+    task_truth=None,
+):
     decisions = []
     for step, obs in enumerate(observations):
+        truth = (
+            task_truth[step]
+            if isinstance(task_truth, (list, tuple))
+            else task_truth
+        )
         decisions.append(
             detector.update(
                 obs,
@@ -60,6 +84,7 @@ def run_case(detector, observations, completed_events, *, done=False, info=None)
                 action=np.zeros(7, dtype=np.float32),
                 done=done and step == len(observations) - 1,
                 info=info if step == len(observations) - 1 else None,
+                task_truth=truth,
             )
         )
     return decisions
@@ -99,6 +124,7 @@ def main() -> None:
             for _ in range(3)
         ],
         ("approach_object",),
+        task_truth=make_truth(grasped=False, on_goal=False, contact=False),
     )
     assert missed_grasp[-1].status == FailureStatus.RECOVERABLE_FAILURE
     assert missed_grasp[-1].reason == "missed_grasp"
@@ -109,6 +135,7 @@ def main() -> None:
         lift_detector,
         [make_obs(eef=(0.39, 0.0, 1.0)) for _ in range(7)],
         ("approach_object", "grasp_completed"),
+        task_truth=make_truth(grasped=True, on_goal=False, contact=False),
     )
     assert no_lift[-1].status == FailureStatus.RECOVERABLE_FAILURE
     assert no_lift[-1].reason == "lift_no_progress"
@@ -122,6 +149,10 @@ def main() -> None:
             make_obs(target=(0.4, 0.0, 1.04), eef=(0.4, 0.0, 1.35)),
         ],
         ("approach_object", "grasp_completed", "object_lifted"),
+        task_truth=[
+            make_truth(grasped=True, on_goal=False, contact=False),
+            make_truth(grasped=False, on_goal=False, contact=False),
+        ],
     )
     assert dropped[-1].status == FailureStatus.RECOVERABLE_FAILURE
     assert dropped[-1].reason == "object_dropped"
@@ -136,6 +167,7 @@ def main() -> None:
             make_obs(target=(0.4, 0.0, 1.04), eef=(0.4, 0.0, 1.06)),
         ],
         ("approach_object", "grasp_completed", "object_lifted"),
+        task_truth=make_truth(grasped=True, on_goal=False, contact=False),
     )
     assert all(decision.status == FailureStatus.NORMAL for decision in controlled_lowering)
     results["controlled_lowering_not_drop"] = controlled_lowering[-1].to_summary()
@@ -148,6 +180,7 @@ def main() -> None:
         place_detector,
         [make_obs(target=(0.2, 0.0, 1.1)) for _ in range(6)],
         ("approach_object", "grasp_completed", "object_lifted"),
+        task_truth=make_truth(grasped=True, on_goal=False, contact=False),
     )
     assert placement_timeout[-1].status == FailureStatus.RECOVERABLE_FAILURE
     assert placement_timeout[-1].reason == "placement_timeout"
@@ -157,7 +190,7 @@ def main() -> None:
     bad_release = run_case(
         release_detector,
         [
-            make_obs(target=(0.2, 0.0, 1.0), gripper=(0.03, -0.03))
+            make_obs(target=(0.68307, 0.0, 1.0), gripper=(0.03, -0.03))
             for _ in range(3)
         ],
         (
@@ -166,9 +199,12 @@ def main() -> None:
             "object_lifted",
             "place_completed",
         ),
+        task_truth=make_truth(grasped=False, on_goal=False, contact=False),
     )
     assert bad_release[-1].status == FailureStatus.RECOVERABLE_FAILURE
     assert bad_release[-1].reason == "released_outside_goal"
+    assert bad_release[-1].evidence["target_goal_distance"] < 0.15
+    assert bad_release[-1].evidence["target_on_goal"] is False
     results["released_outside_goal"] = bad_release[-1].to_summary()
 
     invalid_detector = PickPlaceRuleFailureDetector(task_spec, compact_config())
@@ -185,6 +221,21 @@ def main() -> None:
     assert terminal.status == FailureStatus.TERMINAL_FAILURE
     assert terminal.reason == "episode_terminated_without_success"
     results["terminal_without_success"] = terminal.to_summary()
+
+    successful_done_detector = PickPlaceRuleFailureDetector(
+        task_spec, compact_config()
+    )
+    successful_done = successful_done_detector.update(
+        make_obs(),
+        step=0,
+        done=True,
+        task_truth=make_truth(
+            grasped=False, on_goal=True, contact=True, success=True
+        ),
+    )
+    assert successful_done.status == FailureStatus.NORMAL
+    assert successful_done.evidence["task_success"] is True
+    results["done_with_verified_success"] = successful_done.to_summary()
 
     sim_detector = PickPlaceRuleFailureDetector(task_spec, compact_config())
     simulation_error = sim_detector.update(
@@ -204,12 +255,12 @@ def main() -> None:
     assert collision.reason == "collision"
     results["explicit_collision"] = collision.to_summary()
 
-    # Real LIBERO smoke check: valid observations and a short free-space prefix
-    # must not produce a terminal or recoverable failure.  Long-window progress
-    # rules are disabled here because zero/random actions are not a real policy.
+    # A zero-action trajectory is not accuracy evidence. It is used only to
+    # prove that real LIBERO fields feed active stall rules instead of silently
+    # disabling those rules with an oversized window and timeout.
     real_config = dataclasses.replace(
         compact_config(),
-        history_window=50,
+        history_window=8,
         approach_timeout=500,
     )
     real_detector = PickPlaceRuleFailureDetector(task_spec, real_config)
@@ -224,7 +275,7 @@ def main() -> None:
     )
     real_decisions = []
     try:
-        real_decisions.append(real_detector.update(obs, step=0))
+        real_decisions.append(real_detector.update(obs, step=0, env=env))
         for step in range(1, 21):
             obs, reward, done, info = step_env(
                 env, np.zeros(7, dtype=np.float32)
@@ -236,20 +287,24 @@ def main() -> None:
                     reward=reward,
                     done=done,
                     info=info,
+                    env=env,
                 )
             )
     finally:
         env.close()
-    assert all(not decision.failed for decision in real_decisions)
-    results["real_libero_smoke"] = {
+    assert any(decision.status == FailureStatus.WARNING for decision in real_decisions)
+    assert any(decision.failed for decision in real_decisions)
+    results["real_libero_zero_action_liveness"] = {
         "environment": env_info,
         "steps": len(real_decisions),
         "decision_counts": real_detector.summary()["decision_counts"],
+        "accuracy_evidence": False,
+        "expected_behavior": "stall warning/failure because no policy progress occurs",
     }
 
     report = {
-        "success": True,
-        "scope": "failure_detection_only_no_checkpoint_restore_or_replay",
+        "validation_passed": True,
+        "scope": "synthetic_rule_behavior_and_real_zero_action_liveness_not_accuracy",
         "cases": results,
     }
     print(json.dumps(report, indent=2, sort_keys=True, default=str))

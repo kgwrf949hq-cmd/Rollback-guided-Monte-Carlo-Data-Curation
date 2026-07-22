@@ -12,7 +12,7 @@ ssh user@server
 cd /path/to/Rollback-guided-Monte-Carlo-Data-Curation
 ```
 
-确认当前 shell 使用已经安装 LIBERO、robosuite 和 MuJoCo 的 Python 环境。服务器无法联网时，不要在运行阶段安装依赖。
+确认当前 shell 使用已经安装 LIBERO、robosuite 和 MuJoCo 的 Python 环境。网络可用性会变化；短回归不应在运行时临时安装依赖。
 
 ## 2. 无渲染最小验证
 
@@ -36,7 +36,7 @@ PYTHONPATH=. python libero_rollback_tool.py \
 - `action_sequence_max_abs_diff`
 - `reward_max_abs_diff`
 
-## 3. 三类回归验证
+## 3. 回归验证
 
 ```bash
 PYTHONPATH=. python validation/round1_norender_validation.py
@@ -46,15 +46,16 @@ MUJOCO_GL=osmesa CUDA_VISIBLE_DEVICES="" \
 PYTHONPATH=. python validation/semantic_keyframe_rollback_validation.py
 PYTHONPATH=. python validation/pick_place_checkpoint_validation.py
 PYTHONPATH=. python validation/pick_place_failure_validation.py
+PYTHONPATH=. python validation/rollback_regression_validation.py
 ```
 
 第三个测试使用 OSMesa 软件渲染，不占用 CUDA；若服务器已正确配置 EGL，也可以改用 `MUJOCO_GL=egl` 进行短测试。
 
 语义关键帧测试会运行一段确定性 rollout，在每一步评估语义关键帧，故意执行 4 步大幅扰动，再回退到严格早于失败步的最近关键帧，并 replay 原始动作。报告中的 `selected_keyframe.step` 必须小于 `failure_step`，`replay_report.success` 必须为 `true`。
 
-Pick-and-place 测试还会验证五个子事件的顺序、低风险接近阶段的稀疏 checkpoint、高风险抓取阶段的加密 checkpoint，以及风险系统选点后的确定性回退。
+Pick-and-place 测试分开报告合成几何 predicate 和生产配置结果。生产部分不改间隔、不注入事件，并额外验证真实 MuJoCo contact、LIBERO BDDL `On` 和接触态恢复。
 
-失败检测测试只运行规则和真实 observation smoke，不调用 checkpoint、restore 或 replay。报告的 `scope` 必须为 `failure_detection_only_no_checkpoint_restore_or_replay`。
+失败检测的真实零动作部分只验证 stall 规则确实启用，不声称低误报。历史假阳性回归要求 observation key/shape 不同必须失败、statistic XML 严格哈希不同、旧 fallback 必须恢复 `act`。
 
 ## 4. pi0.5 演示
 

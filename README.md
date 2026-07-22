@@ -1,6 +1,6 @@
 # Rollback-guided Monte Carlo Data Curation
 
-用于 LIBERO/robosuite/MuJoCo 机器人轨迹筛选的 checkpoint/rollback 基础实现。它把一次 rollout 的仿真状态完整保存下来，在检测到失败分支后恢复到最近 checkpoint，并继续执行或重新规划动作，为后续的蒙特卡洛采样、启发式回退和数据集构造提供可靠的状态恢复层。
+用于 LIBERO/robosuite/MuJoCo 机器人轨迹筛选的 checkpoint/rollback 原型。当前证据支持的准确定位是：在当前 LIBERO/MuJoCo 配置上完成了单任务、短轨迹、原生 `mjSTATE_INTEGRATION` 路径的确定性恢复；尚未实现多分支蒙特卡洛采样、pi0.5 自动闭环或数据集 writer，不能称为完整状态系统或优质数据集。
 
 ## 架构概览
 
@@ -11,8 +11,8 @@ LIBERO environment
 EnvRollbackTool.capture()
         │  Checkpoint
         ├─ MuJoCo integration state (mjSTATE_INTEGRATION)
-        ├─ model arrays / XML signature
-        ├─ environment runtime state
+        ├─ selected model arrays / strict + compatibility XML signatures
+        ├─ selected environment/controller runtime state
         ├─ RNG states
         ├─ observation cache and metadata
         └─ pending policy action chunk
@@ -30,7 +30,7 @@ EnvRollbackTool.restore()
 replay actions or query pi0.5 again
 ```
 
-实现分为两层：
+实现分为三层：
 
 1. `libero_rollback_tool.py` 是与策略无关的状态快照和恢复层。
 2. `semantic_checkpoint.py` 是 checkpoint 选择层：根据运动、夹爪、物体、奖励、任务进度和终止信号保存语义关键帧，并保证最大 checkpoint 间隔。
@@ -38,17 +38,18 @@ replay actions or query pi0.5 again
 
 ## 核心功能
 
-- 使用 MuJoCo 原生 `mjSTATE_INTEGRATION` 保存和恢复积分状态；在旧绑定中自动回退到 `sim_state` 或手动字段恢复。
+- 使用 MuJoCo 原生 `mjSTATE_INTEGRATION` 保存和恢复积分状态；旧绑定回退路径会另行恢复并读回核验 `act/ctrl/mocap/time`。
 - 同步 `ctrl`、mocap、activation、solver warm-start、applied forces 等容易被普通 `sim.set_state()` 遗漏的字段。
 - 保存并恢复 model 基础数组及编译派生常量，调用 `mj_setConst` 重建 MuJoCo model 常量。
 - 默认原地恢复，避免重新加载 XML 导致 controller、gripper、history buffer 和 observable cache 被重置；需要跨环境恢复时可显式使用 `reload_xml=True`。
-- 校验模型 XML SHA-256，防止把 checkpoint 恢复到不兼容的模型。
-- 对 MuJoCo 恢复时自动注入的派生 `<statistic>` XML 节点做稳定化处理，支持同一环境连续多次回退。
-- 保存环境 `timestep`、`cur_time`、`done`、控制器/夹爪运行状态、observable cache 和采样时钟。
+- 使用严格 XML SHA-256 标识实际 XML；另设只忽略 MuJoCo 派生 `<statistic>` 的兼容签名。兼容恢复不会再被报告成严格哈希相同。
+- replay 对 observation key、类型和 shape 做严格比较；没有可比较字段、缺 key 或 shape 不同都不能通过。
+- 保存并逐字段读回核验白名单中的环境 `timestep/cur_time/done`、控制器/夹爪运行状态、observable cache 和采样时钟。该白名单不代表任意 wrapper 的完整 Python 状态。
 - 保存 Python `random`、NumPy 全局 RNG、局部 `np.random.Generator`，保证随机动作 replay 可重复。
+- 提供 `make_branch_rng(root_seed, branch_id)` 派生独立分支 RNG；蒙特卡洛分支应使用 `restore_rng=False`，避免每个子分支重放同一随机序列。
 - 可选保存 pi0.5 的 pending action chunk；rollout 中用 `--restore-action-plan` 选择恢复动作块，否则回退后重新请求策略。
 - 提供无渲染、跨环境和双相机渲染验证脚本。
-- 提供 pick-and-place 子事件状态机：`approach_object`、`grasp_completed`、`object_lifted`、`place_completed`、`release_completed`。
+- 提供 pick-and-place 子事件状态机；生产配置中的 grasp 使用 robosuite `_check_grasp`，place/release 使用 LIBERO BDDL `On`、contact 和完整 `check_success` 真值。
 - 子事件完成点强制保存；每条子事件边独立配置风险系数、启发式开关和 checkpoint 间隔。
 
 ## 语义关键帧选择
@@ -61,7 +62,7 @@ semantic score = motion + gripper transition + object motion
                + terminal/success signal
 ```
 
-满足语义阈值时保存 checkpoint；高于 `force_score` 的强语义事件或距离上一个 checkpoint 达到 `max_interval` 时强制保存。`min_interval` 用于抑制连续重复状态，episode start、success、terminal、强语义事件和 max-interval 事件可以突破该限制。失败发生在 `failure_step` 后时，`select_for_rollback()` 只从严格早于失败的 checkpoint 中选择，默认使用最近的安全关键帧，最大化已保留任务进展。
+满足语义阈值时保存 checkpoint；高于 `force_score` 的强语义事件或距离上一个 checkpoint 达到 `max_interval` 时强制保存。默认 `latest_before_failure` 只表示“时间上早于报警”，不声称安全。`latest_safe` 必须由调用方提供 `warning_onset_step` 和安全余量；恢复成功后会剪掉选中点之后、属于废弃未来分支的 checkpoint。
 
 基础用法：
 
@@ -81,7 +82,7 @@ keyframe, report = selector.restore_for_failure(env, failure_step=step)
 
 ## Pick-and-place 子事件与风险策略
 
-`pick_place_checkpoint.py` 在现有 selector 上增加任务语义层。人工配置目标物体和目标区域，程序根据 LIBERO observation 自动判断事件完成：
+`pick_place_checkpoint.py` 在现有 selector 上增加任务语义层。接近与运动特征来自 observation；生产 grasp/place/release 标签还必须通过 robosuite/LIBERO 的接触与 BDDL 真值：
 
 ```python
 from pick_place_checkpoint import (
@@ -116,6 +117,7 @@ decision = detector.update(
     reward=reward,
     done=done,
     info=info,
+    env=env,
 )
 ```
 
@@ -169,6 +171,9 @@ PYTHONPATH=. python validation/pick_place_checkpoint_validation.py
 
 # 仅验证失败检测规则，不运行 checkpoint/restore/replay
 PYTHONPATH=. python validation/pick_place_failure_validation.py
+
+# 历史 observation/XML/旧 fallback 假阳性回归
+PYTHONPATH=. python validation/rollback_regression_validation.py
 ```
 
 验证报告可通过 `--output report.json` 保存；视频和渲染不可用时，工具会自动回退为 PPM 帧和 NPZ 文件。
@@ -204,16 +209,19 @@ PYTHONPATH=. python pi05_libero_rollback_rollout.py \
 
 也可以不使用配置文件，直接传入 `--target-object akita_black_bowl_1 --goal-object plate_1`。JSON 配置把人工定义的物体绑定、事件阈值和每条事件边的风险系数集中保存，新增同类任务时不需要修改 Python 代码。
 
-该脚本中的失败分支是用于演示 rollback 的可控扰动，不代表最终的失败检测器。实际研究流程应将 `demo_failure_step` 替换为任务成功判定、碰撞/越界检测或 learned failure detector，并在其上实现 checkpoint 选择策略。
+该脚本中的失败分支是用于演示 rollback 的可控扰动，不代表最终的失败检测器。报告将运行是否异常记为 `run_ok`，将任务真值单列为 `task_success` 与 `outcome`，不再把脚本未抛异常写成任务成功。
 
 ## 设计边界
 
 本仓库解决的是“恢复到同一仿真状态并可继续 replay”的基础问题，不预设 checkpoint 间隔、失败评分或蒙特卡洛搜索策略。后续可在 `EnvRollbackTool` 之上增加：
 
+checkpoint 中的 Python/NumPy 进程级 RNG 只用于单进程确定性 replay，不应作为并行环境的共享随机状态。
+
 - 根据任务进展和失败概率自适应设置不均匀 checkpoint 间隔；
 - 失败检测与候选 checkpoint 选择；
 - 多分支 rollout、轨迹评分和去重；
-- 将成功分支及其恢复元数据导出为训练数据集。
+- 保留成功、可恢复失败、终止失败和不确定分支及其 lineage；不确定或验证器分歧样本应隔离，而不是冒充成功/失败标签；
+- 导出带 provenance、版本、校验和及 train/validation 划分的数据集。
 
 ## 已验证结果
 
@@ -223,9 +231,11 @@ PYTHONPATH=. python pi05_libero_rollback_rollout.py \
 - 跨环境无渲染恢复：model state、integration state、runtime state、RNG 和 6 步 replay 通过；
 - OSMesa 双相机原地及跨环境恢复：初始图像和 replay 图像最大绝对差均为 `0.0`；
 - 语义关键帧端到端测试：生成 5 个关键帧（0、2、4、12、20），在失败步 18 选择第 12 步关键帧，执行 4 步扰动后恢复，11 步 replay 全部一致；
-- pick-and-place 风险测试：5 个子事件按顺序完成，接近阶段无中间 checkpoint，抓取阶段出现风险间隔 checkpoint，选择失败前关键帧后 16 步 replay 通过；
-- 失败检测测试：正常、停滞、missed grasp、lift failure、drop、placement timeout、bad release 和 terminal failure 全部符合预期；真实 LIBERO 21 步 smoke 轨迹为 21 次 `normal`、0 次误报；
-- `py_compile`、pi0.5 CLI help 及 action-plan 恢复单元检查通过。
+- 生产 pick-and-place 配置在无事件注入的短轨迹中生成 checkpoint `[0, 30]`；这是恢复测试，不是五个真实事件有效性测试；
+- task0 初态中心距约 `0.11693m` 时真实 `contact=False/On=False/success=False`；构造 MuJoCo 接触态后 `contact=True/On=True/success=True`，移除接触并恢复后真值重新一致；
+- 失败规则的合成行为与真实零动作 liveness 通过；零动作会触发 stall，明确不作为 precision、recall 或低误报证据；
+- observation key/shape 假阳性、`<statistic>` 严格哈希、旧 fallback 的 `act` 恢复均有独立回归；
+- `py_compile` 与当前 CLI 检查通过；真实 pi0.5 policy server 闭环仍未验证。
 
 CUDA/EGL 渲染不是上述验证的必要条件；共享 GPU 忙碌时建议使用 OSMesa，避免影响其他任务。
 
@@ -244,11 +254,12 @@ CUDA/EGL 渲染不是上述验证的必要条件；共享 GPU 忙碌时建议使
 | `validation/cross_render_validation.py` | 双相机渲染一致性验证 |
 | `validation/semantic_keyframe_rollback_validation.py` | 关键帧选择到回退 replay 的端到端验证 |
 | `validation/pick_place_checkpoint_validation.py` | pick-and-place 子事件、风险密度和回退 replay 验证 |
-| `validation/pick_place_failure_validation.py` | 失败规则、时序确认和真实 LIBERO 误报 smoke 验证 |
+| `validation/pick_place_failure_validation.py` | 失败规则、时序确认和真实零动作 liveness 验证 |
+| `validation/rollback_regression_validation.py` | observation/XML/fallback 历史假阳性回归 |
 | `docs/REMOTE_TEST_STEPS.md` | 远程服务器运行说明与故障排查 |
 | `docs/SEMANTIC_KEYFRAME_DESIGN.md` | 需求、评分、选择策略和参数调节说明 |
 | `docs/FAILURE_DETECTION.md` | 失败规则、输出语义、验证范围和未来风险融合公式 |
-| `docs/HANDOFF.md` | 三个流程、验证状态、服务器实时状态、限制和后续工作交接 |
+| `docs/HANDOFF.md` | 修复版事实状态、失败分支数据语义及蒙特卡洛 coordinator 实施约束 |
 
 ## License
 

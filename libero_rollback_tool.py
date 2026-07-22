@@ -58,6 +58,7 @@ class Checkpoint:
     time_value: Optional[float]
     model_xml: Optional[str]
     model_xml_sha256: Optional[str]
+    model_xml_compatibility_sha256: Optional[str]
     env_timestep: Optional[int]
     env_cur_time: Optional[float]
     env_done: Optional[bool]
@@ -225,6 +226,27 @@ def find_owner_with_method(env: Any, method_name: str) -> Optional[Any]:
     return None
 
 
+def task_success_signal(
+    env: Any, info: Optional[Dict[str, Any]] = None
+) -> Tuple[Optional[bool], str]:
+    """Read task success from the environment truth API when available."""
+
+    owner = find_owner_with_method(env, "check_success")
+    if owner is not None:
+        try:
+            return bool(owner.check_success()), "env.check_success"
+        except Exception:
+            pass
+    if isinstance(info, dict):
+        for key in ("success", "is_success", "task_success"):
+            if key in info:
+                try:
+                    return bool(info[key]), f"info.{key}"
+                except Exception:
+                    continue
+    return None, "unavailable"
+
+
 def maybe_copy_array(value: Any) -> Optional[np.ndarray]:
     if value is None:
         return None
@@ -299,6 +321,27 @@ def restore_integration_state(
 
 
 def model_xml_sha256(model_xml: Optional[str]) -> Optional[str]:
+    """Return a strict digest of the exact XML text.
+
+    In particular, ``<statistic>`` is part of this identity.  Older versions
+    removed that element and could therefore report two genuinely different
+    XML documents as identical.
+    """
+
+    if not model_xml:
+        return None
+    return hashlib.sha256(model_xml.encode("utf-8")).hexdigest()
+
+
+def model_xml_compatibility_sha256(model_xml: Optional[str]) -> Optional[str]:
+    """Return a restore-compatibility digest.
+
+    MuJoCo may add a derived ``<statistic>`` element to XML serialized after
+    ``mj_setConst``.  That serialization change must not prevent a second
+    in-place restore, but it must also never be presented as an exact XML
+    match. Restore uses this separate digest only for that narrow case.
+    """
+
     if not model_xml:
         return None
     # ``mj_setConst`` may inject a derived ``<statistic>`` element into the
@@ -355,6 +398,23 @@ def restore_rng_state(
         return True
     except Exception:
         return False
+
+
+def make_branch_rng(root_seed: int, branch_id: Any) -> np.random.Generator:
+    """Create a deterministic RNG stream independent of checkpoint replay RNG.
+
+    Monte Carlo callers should derive one generator per branch and restore the
+    simulator with ``restore_rng=False``. Reusing the checkpoint's generator
+    state for every child would intentionally reproduce the same samples.
+    """
+
+    identity = f"{int(root_seed)}:{branch_id}".encode("utf-8")
+    digest = hashlib.sha256(identity).digest()
+    entropy = [int(root_seed)] + [
+        int.from_bytes(digest[offset : offset + 4], "little")
+        for offset in range(0, 16, 4)
+    ]
+    return np.random.default_rng(np.random.SeedSequence(entropy))
 
 
 MODEL_STATE_FIELDS = (
@@ -444,17 +504,24 @@ def restore_model_state(sim: Any, state: Optional[Dict[str, np.ndarray]]) -> Dic
     model = getattr(getattr(sim, "model", None), "_model", None)
     if model is None:
         model = getattr(sim, "model", None)
-    report: Dict[str, Any] = {"restored": [], "failed": []}
+    report: Dict[str, Any] = {
+        "attempted": sorted(state or {}),
+        "written": [],
+        "verified": [],
+        "failed": [],
+        "field_max_abs_diff": {},
+        "success": False,
+    }
     for name, value in (state or {}).items():
         try:
             target = getattr(model, name)
             if np.asarray(target).shape != np.asarray(value).shape:
                 raise ValueError("shape mismatch")
             target[...] = value
-            report["restored"].append(name)
+            report["written"].append(name)
         except Exception as exc:
             report["failed"].append({"field": name, "error": repr(exc)})
-    if report["restored"]:
+    if report["written"]:
         try:
             import mujoco
 
@@ -468,13 +535,35 @@ def restore_model_state(sim: Any, state: Optional[Dict[str, np.ndarray]]) -> Dic
                 try:
                     target = getattr(model, name)
                     target[...] = state[name]
-                    if name not in report["restored"]:
-                        report["restored"].append(name)
+                    if name not in report["written"]:
+                        report["written"].append(name)
                 except Exception as exc:
                     report["failed"].append({"field": name, "error": repr(exc)})
         except Exception as exc:
             report["constants_recomputed"] = False
             report["constants_error"] = repr(exc)
+    for name, value in (state or {}).items():
+        try:
+            target = np.asarray(getattr(model, name))
+            reference = np.asarray(value)
+            if target.shape != reference.shape:
+                raise ValueError(
+                    f"shape mismatch after restore: {target.shape} != {reference.shape}"
+                )
+            diff = max_abs_diff(reference, target)
+            report["field_max_abs_diff"][name] = diff
+            if diff != 0.0:
+                raise ValueError(f"verification max_abs_diff={diff}")
+            report["verified"].append(name)
+        except Exception as exc:
+            if not any(item.get("field") == name for item in report["failed"]):
+                report["failed"].append({"field": name, "error": repr(exc)})
+    report["success"] = bool(state is not None) and (
+        len(report["verified"]) == len(state or {}) and not report["failed"]
+    )
+    # Compatibility for report consumers; this now means verified, not merely
+    # that an assignment was attempted.
+    report["restored"] = list(report["verified"])
     return report
 
 
@@ -698,6 +787,53 @@ def _restore_fields(obj: Any, state: Optional[Dict[str, Any]]) -> None:
             continue
 
 
+def _snapshot_mismatches(reference: Any, current: Any, path: str = "") -> List[str]:
+    """Return exact verification failures for two captured runtime snapshots."""
+
+    location = path or "<root>"
+    if isinstance(reference, np.ndarray):
+        if not isinstance(current, np.ndarray):
+            return [f"{location}:type"]
+        if reference.shape != current.shape:
+            return [f"{location}:shape:{reference.shape}!={current.shape}"]
+        try:
+            equal = np.array_equal(reference, current, equal_nan=True)
+        except (TypeError, ValueError):
+            equal = np.array_equal(reference, current)
+        return [] if equal else [f"{location}:value"]
+    if isinstance(reference, dict):
+        if not isinstance(current, dict):
+            return [f"{location}:type"]
+        mismatches: List[str] = []
+        for key in sorted(set(reference) | set(current), key=str):
+            child_path = f"{path}.{key}" if path else str(key)
+            if key not in reference:
+                mismatches.append(f"{child_path}:unexpected")
+            elif key not in current:
+                mismatches.append(f"{child_path}:missing")
+            else:
+                mismatches.extend(
+                    _snapshot_mismatches(reference[key], current[key], child_path)
+                )
+        return mismatches
+    if isinstance(reference, (list, tuple)):
+        if not isinstance(current, type(reference)):
+            return [f"{location}:type"]
+        mismatches = []
+        if len(reference) != len(current):
+            mismatches.append(f"{location}:length:{len(reference)}!={len(current)}")
+        for index, (expected, actual) in enumerate(zip(reference, current)):
+            mismatches.extend(
+                _snapshot_mismatches(expected, actual, f"{path}[{index}]")
+            )
+        return mismatches
+    try:
+        equal = bool(reference == current)
+    except Exception:
+        equal = False
+    return [] if equal else [f"{location}:value"]
+
+
 def capture_runtime_state(env: Any) -> Dict[str, Any]:
     """Capture controller, gripper and history-buffer state for replay."""
 
@@ -742,9 +878,15 @@ def capture_runtime_state(env: Any) -> Dict[str, Any]:
     }
 
 
-def restore_runtime_state(env: Any, state: Optional[Dict[str, Any]]) -> None:
+def restore_runtime_state(
+    env: Any, state: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
     if not state:
-        return
+        return {
+            "attempted": False,
+            "verified": False,
+            "mismatches": ["runtime_state:not_captured"],
+        }
     owner = get_nested_attr(env, ("env",)) or env
     if "obs_cache" in state:
         restored_cache = _restore_value(
@@ -763,13 +905,20 @@ def restore_runtime_state(env: Any, state: Optional[Dict[str, Any]]) -> None:
             buffer = getattr(robot, name, None)
             if buffer is not None:
                 _restore_fields(buffer, buffer_state)
-        if saved.get("torques") is not None:
+        if "torques" in saved:
             robot.torques = _restore_value(getattr(robot, "torques", None), saved["torques"])
         gripper = getattr(robot, "gripper", None)
-        if gripper is not None and saved.get("gripper_current_action") is not None:
+        if gripper is not None and "gripper_current_action" in saved:
             gripper.current_action = _restore_value(
                 getattr(gripper, "current_action", None), saved["gripper_current_action"]
             )
+    current = capture_runtime_state(env)
+    mismatches = _snapshot_mismatches(state, current)
+    return {
+        "attempted": True,
+        "verified": not mismatches,
+        "mismatches": mismatches,
+    }
 
 
 class EnvRollbackTool:
@@ -823,6 +972,7 @@ class EnvRollbackTool:
             else None,
             model_xml=xml,
             model_xml_sha256=model_xml_sha256(xml),
+            model_xml_compatibility_sha256=model_xml_compatibility_sha256(xml),
             env_timestep=get_env_timestep(env),
             env_cur_time=(
                 float(getattr(env_core, "cur_time"))
@@ -856,14 +1006,17 @@ class EnvRollbackTool:
 
         sim = find_sim(env)
         report: Dict[str, Any] = {
+            "success": False,
             "xml_restored": False,
+            "xml_exact_match": False,
+            "xml_compatibility_match": False,
             "state_restore_method": None,
             "integration_state_restored": False,
             "model_state_restored": False,
             "timestep_restored": False,
             "cur_time_restored": False,
             "done_restored": False,
-            "runtime_state_restored": checkpoint.runtime_state is not None,
+            "runtime_state_restored": False,
             "rng_state_restored": False,
             "rollout_state_available": getattr(checkpoint, "rollout_state", None) is not None,
             "observation_refreshed": False,
@@ -883,21 +1036,70 @@ class EnvRollbackTool:
 
         current_xml = get_model_xml(env, sim)
         current_signature = model_xml_sha256(current_xml)
-        if (
-            checkpoint.model_xml_sha256
+        current_compatibility_signature = model_xml_compatibility_sha256(current_xml)
+        checkpoint_signature = getattr(checkpoint, "model_xml_sha256", None)
+        checkpoint_compatibility_signature = getattr(
+            checkpoint, "model_xml_compatibility_sha256", None
+        )
+        legacy_xml_signature = bool(
+            checkpoint_signature and checkpoint_compatibility_signature is None
+        )
+        if legacy_xml_signature:
+            # Before strict/compatibility identities were separated, this
+            # field stored the statistic-stripped compatibility digest.
+            checkpoint_compatibility_signature = checkpoint_signature
+        report["legacy_xml_signature"] = legacy_xml_signature
+        report["checkpoint_xml_sha256"] = checkpoint_signature
+        report["current_xml_sha256"] = current_signature
+        report["checkpoint_xml_compatibility_sha256"] = (
+            checkpoint_compatibility_signature
+        )
+        report["current_xml_compatibility_sha256"] = current_compatibility_signature
+        report["xml_exact_match"] = bool(
+            not legacy_xml_signature
+            and checkpoint_signature
             and current_signature
-            and checkpoint.model_xml_sha256 != current_signature
+            and checkpoint_signature == current_signature
+        )
+        report["xml_compatibility_match"] = bool(
+            checkpoint_compatibility_signature
+            and current_compatibility_signature
+            and checkpoint_compatibility_signature == current_compatibility_signature
+        )
+        checkpoint_statistic_count = len(
+            re.findall(
+                r"<statistic\b", checkpoint.model_xml or "", flags=re.IGNORECASE
+            )
+        )
+        current_statistic_count = len(
+            re.findall(r"<statistic\b", current_xml or "", flags=re.IGNORECASE)
+        )
+        statistic_serialization_only = bool(
+            report["xml_compatibility_match"]
+            and checkpoint_statistic_count != current_statistic_count
+            and min(checkpoint_statistic_count, current_statistic_count) == 0
+        )
+        report["checkpoint_statistic_count"] = checkpoint_statistic_count
+        report["current_statistic_count"] = current_statistic_count
+        report["xml_compatibility_accepted"] = statistic_serialization_only
+        if (
+            checkpoint_signature
+            and current_signature
+            and checkpoint_signature != current_signature
+            and not statistic_serialization_only
         ):
             raise ValueError(
                 "Checkpoint model does not match the target environment; "
                 "use reload_xml=True for a cross-environment restore"
             )
+        if not report["xml_exact_match"] and statistic_serialization_only:
+            report["xml_difference"] = "derived_statistic_serialization_only"
 
         model_restore_report = restore_model_state(
             sim, getattr(checkpoint, "model_state", None)
         )
         report["model_state_restore"] = model_restore_report
-        report["model_state_restored"] = bool(model_restore_report["restored"])
+        report["model_state_restored"] = bool(model_restore_report["success"])
 
         if restore_integration_state(
             sim, checkpoint.integration_state_spec, checkpoint.integration_state
@@ -927,36 +1129,84 @@ class EnvRollbackTool:
         if report["state_restore_method"] is None:
             ok_qpos = set_data_field(sim, "qpos", checkpoint.qpos)
             ok_qvel = set_data_field(sim, "qvel", checkpoint.qvel)
-            set_data_field(sim, "act", checkpoint.act)
-            if checkpoint.time_value is not None and hasattr(sim, "data"):
-                try:
-                    sim.data.time = checkpoint.time_value
-                except Exception:
-                    pass
             if ok_qpos and ok_qvel:
                 report["state_restore_method"] = "manual qpos/qvel assignment"
 
         if report["state_restore_method"] is None:
             raise RuntimeError(f"Failed to restore MuJoCo state: {report}")
 
-        # These are harmless for the native full state and close the gap for
-        # older bindings whose state object omits controls and mocap values.
-        set_data_field(sim, "ctrl", checkpoint.ctrl)
-        set_data_field(sim, "mocap_pos", checkpoint.mocap_pos)
-        set_data_field(sim, "mocap_quat", checkpoint.mocap_quat)
+        # Restore every compatibility field regardless of which state API was
+        # used. In particular, legacy sim.set_state objects omit ``act``.
+        data_field_values = {
+            "act": checkpoint.act,
+            "ctrl": checkpoint.ctrl,
+            "mocap_pos": checkpoint.mocap_pos,
+            "mocap_quat": checkpoint.mocap_quat,
+        }
+        data_field_writes = {
+            name: set_data_field(sim, name, value)
+            for name, value in data_field_values.items()
+            if value is not None
+        }
+        time_written = False
+        if checkpoint.time_value is not None and hasattr(sim, "data"):
+            try:
+                sim.data.time = checkpoint.time_value
+                time_written = True
+            except Exception:
+                time_written = False
 
         if hasattr(sim, "forward"):
             sim.forward()
         refresh_controller_state(env)
-        restore_runtime_state(env, checkpoint.runtime_state)
+        runtime_restore_report = restore_runtime_state(env, checkpoint.runtime_state)
+        report["runtime_state_restore"] = runtime_restore_report
+        report["runtime_state_restored"] = bool(
+            runtime_restore_report.get("verified")
+        )
         # ``mj_forward`` can update warm-start acceleration. Restore the
         # integration vector once more after all forward calls so the saved
         # state remains exact while derived quantities stay synchronized with
         # the same qpos/qvel.
         if report["integration_state_restored"]:
-            restore_integration_state(
+            second_restore_ok = restore_integration_state(
                 sim, checkpoint.integration_state_spec, checkpoint.integration_state
             )
+            report["integration_state_restored"] = bool(second_restore_ok)
+
+        data_field_diffs = {
+            name: max_abs_diff(value, get_data_field(sim, name))
+            for name, value in data_field_values.items()
+            if value is not None
+        }
+        time_diff = (
+            abs(float(checkpoint.time_value) - float(sim.data.time))
+            if checkpoint.time_value is not None and hasattr(sim, "data")
+            else None
+        )
+        report["data_fields_restore"] = {
+            "writes": data_field_writes,
+            "max_abs_diff": data_field_diffs,
+            "time_written": time_written,
+            "time_abs_diff": time_diff,
+            "verified": all(diff == 0.0 for diff in data_field_diffs.values())
+            and (time_diff is None or time_diff == 0.0),
+        }
+        current_spec, current_integration = capture_integration_state(sim)
+        integration_diff = max_abs_diff(
+            checkpoint.integration_state, current_integration
+        )
+        report["integration_state_verification"] = {
+            "checkpoint_spec": checkpoint.integration_state_spec,
+            "current_spec": current_spec,
+            "max_abs_diff": integration_diff,
+            "verified": bool(
+                checkpoint.integration_state is not None
+                and current_integration is not None
+                and checkpoint.integration_state_spec == current_spec
+                and integration_diff == 0.0
+            ),
+        }
 
         before = get_env_timestep(env)
         set_env_timestep(env, checkpoint.env_timestep)
@@ -969,30 +1219,92 @@ class EnvRollbackTool:
 
         before_cur_time = get_env_runtime_field(env, "cur_time")
         if checkpoint.env_cur_time is not None:
-            report["cur_time_restored"] = set_env_runtime_field(
+            cur_time_written = set_env_runtime_field(
                 env, "cur_time", float(checkpoint.env_cur_time)
             )
         report["cur_time_before_restore"] = before_cur_time
         report["cur_time_after_restore"] = get_env_runtime_field(env, "cur_time")
+        report["cur_time_restored"] = bool(
+            checkpoint.env_cur_time is not None
+            and cur_time_written
+            and report["cur_time_after_restore"] == checkpoint.env_cur_time
+        )
 
         if checkpoint.env_done is not None:
-            report["done_restored"] = set_env_runtime_field(
+            done_written = set_env_runtime_field(
                 env, "done", bool(checkpoint.env_done)
             )
         report["done_after_restore"] = get_env_runtime_field(env, "done")
+        report["done_restored"] = bool(
+            checkpoint.env_done is not None
+            and done_written
+            and report["done_after_restore"] == checkpoint.env_done
+        )
 
         if restore_rng:
-            report["rng_state_restored"] = restore_rng_state(
+            rng_write_ok = restore_rng_state(
                 getattr(checkpoint, "rng_state", None), rng
+            )
+            current_rng_state = capture_rng_state(rng)
+            checkpoint_rng_state = getattr(checkpoint, "rng_state", None)
+            if isinstance(checkpoint_rng_state, dict):
+                # A caller may supply a Generator at restore time even when
+                # the checkpoint captured only process RNGs. Extra current
+                # sources do not invalidate verification of captured sources.
+                current_rng_state = {
+                    key: current_rng_state.get(key) for key in checkpoint_rng_state
+                }
+            rng_mismatches = _snapshot_mismatches(
+                checkpoint_rng_state, current_rng_state
+            )
+            report["rng_state_restore"] = {
+                "write_ok": rng_write_ok,
+                "verified": bool(rng_write_ok and not rng_mismatches),
+                "mismatches": rng_mismatches,
+            }
+            report["rng_state_restored"] = bool(
+                report["rng_state_restore"]["verified"]
             )
 
         # The observable values, sampling clocks and cache were restored above,
         # so reading without a forced sample returns the checkpoint observation
         # and preserves the future sampling schedule. A forced sample here
         # would advance observable clocks and break deterministic replay.
-        report["observation_refreshed"] = (
-            get_observation(env, force_update=False) is not None
+        restored_observation = get_observation(env, force_update=False)
+        report["observation_refreshed"] = restored_observation is not None
+        observation_restore_report = compare_observations(
+            checkpoint.obs, restored_observation
         )
+        report["observation_restore"] = observation_restore_report
+        report["observation_restored"] = bool(
+            observation_restore_report.get("comparison_valid")
+            and observation_restore_report.get("observation_max_abs_diff") == 0.0
+        )
+        state_verified = (
+            report["integration_state_verification"]["verified"]
+            if checkpoint.integration_state is not None
+            else max_abs_diff(checkpoint.qpos, get_data_field(sim, "qpos")) == 0.0
+            and max_abs_diff(checkpoint.qvel, get_data_field(sim, "qvel")) == 0.0
+        )
+        required_checks = [
+            bool(state_verified),
+            bool(report["data_fields_restore"]["verified"]),
+        ]
+        if checkpoint.model_state is not None:
+            required_checks.append(bool(report["model_state_restored"]))
+        if checkpoint.runtime_state is not None:
+            required_checks.append(bool(report["runtime_state_restored"]))
+        if checkpoint.env_timestep is not None:
+            required_checks.append(bool(report["timestep_restored"]))
+        if checkpoint.env_cur_time is not None:
+            required_checks.append(bool(report["cur_time_restored"]))
+        if checkpoint.env_done is not None:
+            required_checks.append(bool(report["done_restored"]))
+        if restore_rng:
+            required_checks.append(bool(report["rng_state_restored"]))
+        if checkpoint.obs is not None:
+            required_checks.append(bool(report["observation_restored"]))
+        report["success"] = all(required_checks)
         return report
 
 
@@ -1172,40 +1484,106 @@ def find_image_key(obs: Optional[Dict[str, Any]]) -> Optional[str]:
 def compare_observations(
     reference: Optional[Dict[str, Any]], current: Optional[Dict[str, Any]]
 ) -> Dict[str, Any]:
-    """Compare all numeric observation fields without advancing the env."""
+    """Strictly compare every observation field without advancing the env.
+
+    Missing keys, extra keys, type changes and shape changes are comparison
+    failures. A report with no comparable fields is invalid rather than a
+    vacuous match.
+    """
 
     result: Dict[str, Any] = {
+        "comparison_valid": False,
         "observation_keys_match": False,
         "observation_max_abs_diff": None,
         "image_max_abs_diff": None,
         "image_mean_abs_diff": None,
         "observation_missing_keys": [],
+        "observation_extra_keys": [],
+        "observation_shape_mismatches": {},
+        "observation_type_mismatches": {},
+        "observation_value_mismatches": [],
+        "compared_field_count": 0,
+        "compared_array_field_count": 0,
+        "compared_image_field_count": 0,
     }
     if not isinstance(reference, dict) or not isinstance(current, dict):
+        result["comparison_error"] = "reference/current must both be dictionaries"
         return result
 
     ref_keys = set(reference)
     cur_keys = set(current)
     result["observation_keys_match"] = ref_keys == cur_keys
     result["observation_missing_keys"] = sorted(ref_keys - cur_keys)
+    result["observation_extra_keys"] = sorted(cur_keys - ref_keys)
     diffs: List[float] = []
     image_diffs: List[np.ndarray] = []
     for key in sorted(ref_keys & cur_keys):
         ref_value, cur_value = reference[key], current[key]
-        if not isinstance(ref_value, np.ndarray) or not isinstance(cur_value, np.ndarray):
+        ref_is_array = isinstance(ref_value, np.ndarray)
+        cur_is_array = isinstance(cur_value, np.ndarray)
+        if ref_is_array != cur_is_array:
+            result["observation_type_mismatches"][key] = {
+                "reference": type(ref_value).__name__,
+                "current": type(cur_value).__name__,
+            }
             continue
-        if ref_value.shape != cur_value.shape:
+        if ref_is_array and cur_is_array:
+            if ref_value.shape != cur_value.shape:
+                result["observation_shape_mismatches"][key] = {
+                    "reference": list(ref_value.shape),
+                    "current": list(cur_value.shape),
+                }
+                continue
+            result["compared_field_count"] += 1
+            result["compared_array_field_count"] += 1
+            is_image = key.endswith("_image") or "image" in key
+            if is_image:
+                result["compared_image_field_count"] += 1
+            if np.issubdtype(ref_value.dtype, np.number) and np.issubdtype(
+                cur_value.dtype, np.number
+            ):
+                diff = np.abs(
+                    ref_value.astype(np.float64) - cur_value.astype(np.float64)
+                )
+                field_max = float(np.max(diff)) if diff.size else 0.0
+                diffs.append(field_max)
+                if is_image:
+                    image_diffs.append(diff)
+            else:
+                equal = np.array_equal(ref_value, cur_value)
+                diffs.append(0.0 if equal else float("inf"))
+                if not equal:
+                    result["observation_value_mismatches"].append(key)
             continue
-        diff = np.abs(ref_value.astype(np.float64) - cur_value.astype(np.float64))
-        if diff.size:
-            diffs.append(float(np.max(diff)))
-            if key.endswith("_image") or "image" in key:
-                image_diffs.append(diff)
+        if isinstance(ref_value, (bool, int, float, np.number)) and isinstance(
+            cur_value, (bool, int, float, np.number)
+        ):
+            result["compared_field_count"] += 1
+            diffs.append(abs(float(ref_value) - float(cur_value)))
+            continue
+        try:
+            equal = bool(ref_value == cur_value)
+        except Exception:
+            equal = False
+        result["compared_field_count"] += 1
+        if not equal:
+            result["observation_value_mismatches"].append(key)
+            diffs.append(float("inf"))
     if diffs:
         result["observation_max_abs_diff"] = max(diffs)
     if image_diffs:
         result["image_max_abs_diff"] = max(float(np.max(x)) for x in image_diffs)
-        result["image_mean_abs_diff"] = float(np.mean(np.concatenate([x.reshape(-1) for x in image_diffs])))
+        result["image_mean_abs_diff"] = float(
+            np.mean(np.concatenate([x.reshape(-1) for x in image_diffs]))
+        )
+    result["comparison_valid"] = bool(
+        ref_keys
+        and result["observation_keys_match"]
+        and not result["observation_shape_mismatches"]
+        and not result["observation_type_mismatches"]
+        and not result["observation_value_mismatches"]
+        and result["compared_field_count"] == len(ref_keys)
+    )
     return result
 
 
@@ -1288,17 +1666,15 @@ def capture_trace_point(
 
     sim = find_sim(env)
     state_spec, integration_state = capture_integration_state(sim)
+    task_success, success_source = task_success_signal(env)
     return {
         "state_spec": state_spec,
         "integration_state": integration_state,
         "obs": copy_obs(obs),
         "reward": float(reward),
         "done": bool(done),
-        "success": bool(
-            find_owner_with_method(env, "check_success").check_success()
-            if find_owner_with_method(env, "check_success") is not None
-            else False
-        ),
+        "success": task_success,
+        "success_source": success_source,
     }
 
 
@@ -1323,11 +1699,17 @@ def compare_replay_traces(
         "reward_max_abs_diff": None,
         "done_mismatches": None,
         "success_mismatches": None,
+        "success_signal_unavailable_steps": [],
+        "observation_comparison_valid_steps": 0,
+        "observation_mismatch_steps": [],
+        "observation_shape_mismatch_steps": [],
+        "observation_key_mismatch_steps": [],
+        "image_fields_compared": 0,
     }
     if len(reference) != len(replay):
         report["length_mismatch"] = True
     if not reference:
-        report["success"] = len(replay) == 0
+        report["comparison_error"] = "empty reference trace is not validation evidence"
         return report
 
     state_diffs: List[float] = []
@@ -1336,11 +1718,26 @@ def compare_replay_traces(
     reward_diffs: List[float] = []
     done_mismatches = 0
     success_mismatches = 0
-    for ref, got in zip(reference, replay):
+    success_signal_unavailable_steps: List[int] = []
+    observation_valid_steps = 0
+    observation_mismatch_steps: List[int] = []
+    observation_shape_mismatch_steps: List[int] = []
+    observation_key_mismatch_steps: List[int] = []
+    image_fields_compared = 0
+    for step_index, (ref, got) in enumerate(zip(reference, replay)):
         diff = max_abs_diff(ref["integration_state"], got["integration_state"])
         if diff is not None:
             state_diffs.append(diff)
         obs_report = compare_observations(ref["obs"], got["obs"])
+        if obs_report["comparison_valid"]:
+            observation_valid_steps += 1
+        else:
+            observation_mismatch_steps.append(step_index)
+        if not obs_report["observation_keys_match"]:
+            observation_key_mismatch_steps.append(step_index)
+        if obs_report["observation_shape_mismatches"]:
+            observation_shape_mismatch_steps.append(step_index)
+        image_fields_compared += int(obs_report["compared_image_field_count"])
         if obs_report["observation_max_abs_diff"] is not None:
             obs_diffs.append(obs_report["observation_max_abs_diff"])
         for key in set(ref.get("obs") or {}) & set(got.get("obs") or {}):
@@ -1354,7 +1751,9 @@ def compare_replay_traces(
                 image_diffs.append(np.abs(a.astype(np.float64) - b.astype(np.float64)))
         reward_diffs.append(abs(float(ref["reward"]) - float(got["reward"])))
         done_mismatches += int(bool(ref["done"]) != bool(got["done"]))
-        success_mismatches += int(bool(ref["success"]) != bool(got["success"]))
+        if ref.get("success") is None or got.get("success") is None:
+            success_signal_unavailable_steps.append(step_index)
+        success_mismatches += int(ref.get("success") != got.get("success"))
 
     report["integration_state_max_abs_diff"] = max(state_diffs) if state_diffs else None
     report["observation_max_abs_diff"] = max(obs_diffs) if obs_diffs else None
@@ -1366,16 +1765,25 @@ def compare_replay_traces(
     report["reward_max_abs_diff"] = max(reward_diffs) if reward_diffs else None
     report["done_mismatches"] = done_mismatches
     report["success_mismatches"] = success_mismatches
+    report["success_signal_unavailable_steps"] = success_signal_unavailable_steps
+    report["observation_comparison_valid_steps"] = observation_valid_steps
+    report["observation_mismatch_steps"] = observation_mismatch_steps
+    report["observation_shape_mismatch_steps"] = observation_shape_mismatch_steps
+    report["observation_key_mismatch_steps"] = observation_key_mismatch_steps
+    report["image_fields_compared"] = image_fields_compared
 
     report["success"] = (
         len(reference) == len(replay)
         and len(state_diffs) == len(reference)
         and max(state_diffs) <= tolerance
-        and (not obs_diffs or max(obs_diffs) <= observation_tolerance)
+        and observation_valid_steps == len(reference)
+        and len(obs_diffs) == len(reference)
+        and max(obs_diffs) <= observation_tolerance
         and (not image_diffs or report["image_max_abs_diff"] <= observation_tolerance)
         and (not reward_diffs or max(reward_diffs) <= tolerance)
         and done_mismatches == 0
         and success_mismatches == 0
+        and not success_signal_unavailable_steps
     )
     return report
 
@@ -1503,7 +1911,12 @@ def run_test(args: argparse.Namespace) -> Dict[str, Any]:
 
         log("[5/5] Writing validation report...")
         initial_state_ok = (
-            compare_report.get("integration_state_max_abs_diff") is not None
+            bool(restore_report.get("success"))
+            and bool(compare_report.get("comparison_valid"))
+            and compare_report.get("observation_max_abs_diff") is not None
+            and compare_report["observation_max_abs_diff"]
+            <= args.observation_tolerance
+            and compare_report.get("integration_state_max_abs_diff") is not None
             and compare_report["integration_state_max_abs_diff"] <= args.tolerance
             and compare_report.get("env_timestep_checkpoint")
             == compare_report.get("env_timestep_restored")
@@ -1553,6 +1966,9 @@ def run_test(args: argparse.Namespace) -> Dict[str, Any]:
                 ),
                 "has_rollout_state": checkpoint.rollout_state is not None,
                 "model_xml_sha256": checkpoint.model_xml_sha256,
+                "model_xml_compatibility_sha256": getattr(
+                    checkpoint, "model_xml_compatibility_sha256", None
+                ),
                 "has_model_xml": checkpoint.model_xml is not None,
                 "obs_keys": sorted(checkpoint.obs.keys()) if checkpoint.obs else None,
             },

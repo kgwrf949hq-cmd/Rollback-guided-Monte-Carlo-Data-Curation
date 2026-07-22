@@ -2,7 +2,7 @@
 
 ## 1. 整体需求
 
-当前系统已经能够可靠地恢复 MuJoCo 的完整状态；checkpoint 选择层需要解决的是“什么时候保存”和“失败后回到哪里”。第一版需求如下：
+当前系统已在指定 LIBERO/MuJoCo 配置的短轨迹上验证原生积分状态与白名单运行态恢复；这不等于任意 wrapper 的完整状态。checkpoint 选择层需要解决的是“什么时候保存”和“失败后回到哪里”。
 
 ### 功能需求
 
@@ -10,7 +10,7 @@
 2. 没有明显事件时仍然以最大步数间隔保存恢复点，避免长区间无 checkpoint。
 3. 抑制连续重复保存，控制存储和捕获开销。
 4. 每个 checkpoint 记录触发原因、分数、特征和动作元数据，支持数据集筛选和论文分析。
-5. 失败发生后只能选择严格早于失败步的 checkpoint，默认选择最近的安全关键帧。
+5. 纯时间策略只声称 checkpoint 严格早于失败步；声称“安全”时必须提供 warning onset 与安全余量。
 6. 选择层不改变现有 `Checkpoint` 格式，实际状态恢复继续由 `EnvRollbackTool` 完成。
 
 ### 非功能需求
@@ -22,7 +22,7 @@
 - 同样的输入状态流和阈值应产生同样的关键帧序列。
 - 允许后续接入碰撞检测、任务进度模型或 learned failure detector，而不修改底层恢复逻辑。
 
-底层模型身份校验仍然使用 XML SHA-256；MuJoCo 在第一次恢复后可能自动插入派生的 `<statistic>` 节点，因此哈希计算会忽略该节点。这样既能拒绝真正不同的模型，也能支持同一环境上的连续多次 rollback。
+底层同时保存严格 XML SHA-256 和恢复兼容签名。只有兼容签名忽略 MuJoCo 可能注入的派生 `<statistic>`；严格哈希始终区分不同 statistic XML。
 
 ## 2. 关键帧语义
 
@@ -70,11 +70,11 @@ observe state_t
 
 ```python
 eligible = [k for k in keyframes if k.step < f and not k.checkpoint.env_done]
-rollback_keyframe = max(eligible, key=lambda k: k.step)  # latest_safe
+rollback_keyframe = max(eligible, key=lambda k: k.step)  # latest_before_failure
 EnvRollbackTool.restore(env, rollback_keyframe.checkpoint)
 ```
 
-`best_score` 策略也已提供，用于比较“最近状态”和“语义置信度最高状态”的差异；生产默认仍使用 `latest_safe`，因为它丢失的任务进展最少。
+`best_score` 用于比较“最近状态”和“语义置信度最高状态”。`latest_safe` 需要 `warning_onset_step`，并在选点后剪除废弃分支上更晚的 checkpoint。
 
 ## 4. 调用接口
 
@@ -105,6 +105,8 @@ keyframe, restore_report = selector.restore_for_failure(
     env,
     failure_step=failure_step,
     strategy="latest_safe",
+    warning_onset_step=warning_onset_step,
+    safety_margin_steps=2,
     rng=rng,
 )
 ```
@@ -122,11 +124,11 @@ keyframe, restore_report = selector.restore_for_failure(
 - 机器人动作频率较高、状态变化平滑时，提高 `min_interval`；
 - 任务有短暂接触或夹爪事件时，降低 `gripper_threshold` 和 `object_motion_threshold`；
 - 任务长、失败代价高时，降低 `max_interval`；
-- 长 rollout 或多分支采样时，设置合适的 `max_keyframes`，避免完整 MuJoCo 状态无限增长；
+- 长 rollout 或多分支采样时，设置合适的 `max_keyframes`，避免 checkpoint 内存无限增长；
 - 关键动作必须保留时，降低 `score_threshold` 或提高对应事件权重；
 - 先用验证脚本观察 `keyframe_summary` 的 label 分布，再在多任务数据上统计 checkpoint 数量、恢复成功率和平均回退距离。
 
-当前算法是可解释的启发式基线，不替代最终的 learned failure detector。后续蒙特卡洛数据构造可以把关键帧作为分支节点，对每个节点采样多个动作后按任务成功、进度和安全性评分，保留成功分支及其关键帧元数据。
+当前算法是可解释的启发式基线，不替代最终的 learned failure detector。后续蒙特卡洛数据构造应保留成功、可恢复失败、终止失败与不确定分支，并记录分支 lineage、warning onset、回退点和原始真值；失败分支是训练与偏好数据，不应被默认丢弃。
 
 ## 6. Pick-and-place 第一版
 
@@ -144,7 +146,7 @@ place_completed
 release_completed
 ```
 
-人工只需为任务实例绑定 `target_object` 和 `goal_object`，并按需要调整距离、高度、夹爪开合和稳定步数阈值。检测器使用物体位置、物体到末端的相对位置、夹爪 aperture、物体高度和物体运动稳定性；也支持通过 `info["<event>_completed"]` 接入更可靠的环境或任务判定。
+人工为任务实例绑定 `target_object` 和 `goal_object`，并调整距离、高度、夹爪开合和稳定步数阈值。生产配置默认 `require_grasp_truth=true`、`require_place_truth=true`、`allow_info_event_overrides=false`：grasp 使用 robosuite `_check_grasp`，place/release 使用 LIBERO BDDL `On` 和 contact。`info` 事件覆写只能在显式开启的合成 fixture 中使用。
 
 人工配置放在 `configs/pick_place/*.json`，可以同时设置任务阈值和下列事件边策略；`load_pick_place_config()` 负责校验顺序并加载，不需要为每个 LIBERO task 改 Python 源码。
 

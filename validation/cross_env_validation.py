@@ -189,7 +189,9 @@ def main():
         print("action_sequence_max_abs_diff", action_diff)
         print("rng_probe_max_abs_diff", rng_diff)
         assert restore_report["xml_restored"]
+        assert restore_report["success"]
         assert restore_report["rng_state_restored"]
+        assert initial_report["comparison_valid"]
         assert initial_report["integration_state_max_abs_diff"] <= 1e-10
         assert replay_report["success"]
         assert action_diff <= 1e-10

@@ -65,7 +65,9 @@ def main() -> None:
         print("initial_report", initial_report)
         print("replay_report", replay_report)
         assert restore_report["state_restore_method"].startswith("mujoco.mj_setState")
+        assert restore_report["success"]
         assert restore_report["integration_state_restored"]
+        assert initial_report["comparison_valid"]
         assert initial_report["integration_state_max_abs_diff"] <= 1e-10
         assert replay_report["success"]
     finally:

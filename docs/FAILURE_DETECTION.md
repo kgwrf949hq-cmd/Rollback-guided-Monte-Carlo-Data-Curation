@@ -10,7 +10,8 @@
 
 - 当前 LIBERO observation；
 - 当前 step、action、reward、done、info；
-- 已完成的 pick-and-place 子事件列表。
+- 已完成的 pick-and-place 子事件列表；
+- 可选的 `env` / `PickPlaceTaskTruth`，用于读取 `_check_grasp`、BDDL `On`、contact 和 `check_success`。
 
 输出：
 
@@ -22,6 +23,7 @@ FailureDecision(
     current_stage="object_lifted",
     consecutive_steps=2,
     hard_failure=False,
+    warning_onset_step=17,
     evidence={"height_progress": 0.0, "required_progress": 0.015},
 )
 ```
@@ -64,4 +66,4 @@ final_risk = 1.0 - (1.0 - rule_risk) * (1.0 - learned_risk)
 PYTHONPATH=. python validation/pick_place_failure_validation.py
 ```
 
-该脚本覆盖正常接近、接近停滞、missed grasp、lift no progress、object dropped、placement timeout、released outside goal、invalid observation 和未成功终止。真实 LIBERO smoke 部分只检查 observation 兼容性与短轨迹误报，不涉及 checkpoint、restore 或 replay。
+该脚本覆盖正常接近、接近停滞、missed grasp、lift no progress、object dropped、placement timeout、released outside goal、invalid observation、真实 success 与未成功终止。真实 LIBERO 部分是 21 步零动作 liveness 检查，预期会触发 stall；它不是低误报、precision 或 recall 证据。

@@ -72,6 +72,10 @@ def main():
         print("initial_report", initial_report)
         print("replay_report", replay_report)
         assert restore_report["xml_restored"]
+        assert restore_report["success"]
+        assert initial_report["comparison_valid"]
+        assert initial_report["compared_image_field_count"] > 0
+        assert replay_report["image_fields_compared"] > 0
         assert initial_report["image_max_abs_diff"] == 0.0
         assert replay_report["success"]
         assert replay_report["image_max_abs_diff"] == 0.0

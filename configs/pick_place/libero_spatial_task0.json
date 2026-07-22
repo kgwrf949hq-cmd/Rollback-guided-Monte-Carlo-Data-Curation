@@ -10,7 +10,10 @@
     "place_distance": 0.1,
     "place_height_tolerance": 0.08,
     "stable_object_motion": 0.008,
-    "confirmation_steps": 2
+    "confirmation_steps": 2,
+    "require_grasp_truth": true,
+    "require_place_truth": true,
+    "allow_info_event_overrides": false
   },
   "edge_policies": [
     {

@@ -16,7 +16,11 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
-from libero_rollback_tool import EnvRollbackTool, get_observation
+from libero_rollback_tool import (
+    EnvRollbackTool,
+    get_observation,
+    task_success_signal,
+)
 from semantic_checkpoint import (
     SemanticKeyframe,
     SemanticKeyframeConfig,
@@ -48,6 +52,9 @@ class PickPlaceTaskSpec:
     place_height_tolerance: float = 0.08
     stable_object_motion: float = 0.008
     confirmation_steps: int = 2
+    require_grasp_truth: bool = True
+    require_place_truth: bool = True
+    allow_info_event_overrides: bool = False
 
     def __post_init__(self) -> None:
         if not self.target_object or not self.goal_object:
@@ -148,6 +155,103 @@ class PickPlaceFeatures:
 
 
 @dataclasses.dataclass(frozen=True)
+class PickPlaceTaskTruth:
+    """Task truth read from LIBERO/robosuite rather than geometry proxies."""
+
+    target_grasped: Optional[bool]
+    target_goal_contact: Optional[bool]
+    target_on_goal: Optional[bool]
+    task_success: Optional[bool]
+    bddl_goal_matches: Optional[bool]
+    sources: Dict[str, str]
+
+    def as_dict(self) -> Dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+def _find_libero_task_owner(env: Any) -> Optional[Any]:
+    owner = env
+    visited = set()
+    for _ in range(6):
+        if owner is None or id(owner) in visited:
+            break
+        visited.add(id(owner))
+        if hasattr(owner, "object_states_dict") and hasattr(owner, "get_object"):
+            return owner
+        next_owner = getattr(owner, "env", None)
+        if next_owner is None:
+            next_owner = getattr(owner, "_env", None)
+        owner = next_owner
+    return None
+
+
+def extract_pick_place_task_truth(
+    env: Any,
+    spec: PickPlaceTaskSpec,
+    info: Optional[Mapping[str, Any]] = None,
+) -> PickPlaceTaskTruth:
+    """Read grasp, contact, BDDL ``On`` and full task-success truth."""
+
+    core = _find_libero_task_owner(env)
+    sources: Dict[str, str] = {}
+    grasped: Optional[bool] = None
+    contact: Optional[bool] = None
+    on_goal: Optional[bool] = None
+    bddl_goal_matches: Optional[bool] = None
+    success, success_source = task_success_signal(
+        env, dict(info) if isinstance(info, Mapping) else None
+    )
+    sources["task_success"] = success_source
+
+    if core is not None:
+        states = getattr(core, "object_states_dict", {})
+        target_state = states.get(spec.target_object)
+        goal_state = states.get(spec.goal_object)
+        if target_state is not None and goal_state is not None:
+            try:
+                contact = bool(goal_state.check_contact(target_state))
+                sources["target_goal_contact"] = (
+                    "libero.object_state.check_contact"
+                )
+            except Exception:
+                pass
+            try:
+                # This is the implementation used by LIBERO's BDDL On
+                # predicate: eval_predicate_fn('on', target, goal) calls
+                # goal.check_ontop(target).
+                on_goal = bool(goal_state.check_ontop(target_state))
+                sources["target_on_goal"] = "libero.bddl.On/check_ontop"
+            except Exception:
+                pass
+        parsed_problem = getattr(core, "parsed_problem", {})
+        goal_conditions = parsed_problem.get("goal_state", [])
+        bddl_goal_matches = any(
+            len(condition) == 3
+            and str(condition[0]).lower() == "on"
+            and condition[1] == spec.target_object
+            and condition[2] == spec.goal_object
+            for condition in goal_conditions
+        )
+        sources["bddl_goal_matches"] = "libero.parsed_problem.goal_state"
+        try:
+            robot = core.robots[0]
+            target_object = core.get_object(spec.target_object)
+            grasped = bool(core._check_grasp(robot.gripper, target_object))
+            sources["target_grasped"] = "robosuite._check_grasp"
+        except Exception:
+            pass
+
+    return PickPlaceTaskTruth(
+        target_grasped=grasped,
+        target_goal_contact=contact,
+        target_on_goal=on_goal,
+        task_success=success,
+        bddl_goal_matches=bddl_goal_matches,
+        sources=sources,
+    )
+
+
+@dataclasses.dataclass(frozen=True)
 class SubEventTransition:
     event_name: str
     event_index: int
@@ -155,6 +259,7 @@ class SubEventTransition:
     confidence: float
     features: Dict[str, float]
     source: str
+    task_truth: Dict[str, Any]
 
     def to_summary(self) -> Dict[str, Any]:
         return dataclasses.asdict(self)
@@ -192,6 +297,7 @@ class PickPlaceSubEventDetector:
         self._initial_target_height: Optional[float] = None
         self._previous_target_pos: Optional[np.ndarray] = None
         self._last_features: Optional[PickPlaceFeatures] = None
+        self._last_task_truth: Optional[PickPlaceTaskTruth] = None
 
     @property
     def current_event_index(self) -> int:
@@ -214,6 +320,7 @@ class PickPlaceSubEventDetector:
         self._initial_target_height = None
         self._previous_target_pos = None
         self._last_features = None
+        self._last_task_truth = None
 
     def restore_progress(
         self,
@@ -228,12 +335,52 @@ class PickPlaceSubEventDetector:
         self._confirmation_count = 0
         self._previous_target_pos = None
         self._last_features = None
+        self._last_task_truth = None
         if isinstance(obs, Mapping):
             target = _vector(obs, f"{self.spec.target_object}_pos", 3)
             if target is not None:
                 self._previous_target_pos = target
                 if self._initial_target_height is None:
                     self._initial_target_height = float(target[2])
+
+    def snapshot_state(self) -> Dict[str, Any]:
+        """Return the logical detector state needed for branch restoration."""
+
+        return {
+            "completed_events": list(self.completed_events),
+            "confirmation_count": int(self._confirmation_count),
+            "initial_target_height": self._initial_target_height,
+            "previous_target_pos": (
+                self._previous_target_pos.tolist()
+                if self._previous_target_pos is not None
+                else None
+            ),
+        }
+
+    def restore_state(
+        self, state: Optional[Mapping[str, Any]], obs: Optional[Mapping[str, Any]]
+    ) -> None:
+        """Restore detector progress from checkpoint metadata."""
+
+        saved = dict(state or {})
+        completed = saved.get("completed_events", [])
+        valid_prefix = list(PICK_PLACE_EVENTS[: len(completed)])
+        if list(completed) != valid_prefix:
+            raise ValueError("checkpoint contains a non-monotonic event prefix")
+        self.completed_events = valid_prefix
+        self.transitions.clear()
+        self._confirmation_count = max(0, int(saved.get("confirmation_count", 0)))
+        initial_height = saved.get("initial_target_height")
+        self._initial_target_height = (
+            float(initial_height) if initial_height is not None else None
+        )
+        self._previous_target_pos = None
+        if isinstance(obs, Mapping):
+            self._previous_target_pos = _vector(
+                obs, f"{self.spec.target_object}_pos", 3
+            )
+        self._last_features = None
+        self._last_task_truth = None
 
     def extract_features(self, obs: Mapping[str, Any]) -> PickPlaceFeatures:
         target = _vector(obs, f"{self.spec.target_object}_pos", 3)
@@ -274,7 +421,12 @@ class PickPlaceSubEventDetector:
             object_motion=object_motion,
         )
 
-    def _predicate(self, event_name: str, features: PickPlaceFeatures) -> Tuple[bool, float]:
+    def _predicate(
+        self,
+        event_name: str,
+        features: PickPlaceFeatures,
+        task_truth: Optional[PickPlaceTaskTruth],
+    ) -> Tuple[bool, float]:
         spec = self.spec
         if event_name == "approach_object":
             ratio = features.eef_target_distance / max(spec.approach_distance, 1e-12)
@@ -284,18 +436,45 @@ class PickPlaceSubEventDetector:
             aperture_ratio = features.gripper_aperture / max(
                 spec.gripper_closed_aperture, 1e-12
             )
-            passed = distance_ratio <= 1.0 and aperture_ratio <= 1.0
+            grasp_truth = task_truth.target_grasped if task_truth else None
+            truth_passed = (
+                grasp_truth is True
+                if spec.require_grasp_truth
+                else grasp_truth is not False
+            )
+            passed = (
+                distance_ratio <= 1.0
+                and aperture_ratio <= 1.0
+                and truth_passed
+            )
             confidence = 1.0 - max(distance_ratio, aperture_ratio)
             return passed, float(np.clip(confidence, 0.0, 1.0))
         if event_name == "object_lifted":
             ratio = features.lifted_height / max(spec.lift_height, 1e-12)
-            return ratio >= 1.0, float(np.clip(ratio, 0.0, 1.0))
+            grasp_truth = task_truth.target_grasped if task_truth else None
+            truth_passed = (
+                grasp_truth is True
+                if spec.require_grasp_truth
+                else grasp_truth is not False
+            )
+            return ratio >= 1.0 and truth_passed, float(np.clip(ratio, 0.0, 1.0))
         if event_name == "place_completed":
             distance_ratio = features.target_goal_distance / max(spec.place_distance, 1e-12)
             height_error = abs(features.target_height - features.goal_height)
             height_ratio = height_error / max(spec.place_height_tolerance, 1e-12)
             stable = features.object_motion <= spec.stable_object_motion
-            passed = distance_ratio <= 1.0 and height_ratio <= 1.0 and stable
+            on_goal = task_truth.target_on_goal if task_truth else None
+            if spec.require_place_truth:
+                passed = (
+                    on_goal is True
+                    and task_truth is not None
+                    and task_truth.bddl_goal_matches is True
+                    and stable
+                )
+            else:
+                passed = (
+                    distance_ratio <= 1.0 and height_ratio <= 1.0 and stable
+                )
             confidence = 1.0 - max(distance_ratio, height_ratio)
             return passed, float(np.clip(confidence, 0.0, 1.0))
         if event_name == "release_completed":
@@ -304,7 +483,21 @@ class PickPlaceSubEventDetector:
                 spec.gripper_open_aperture, 1e-12
             )
             stable = features.object_motion <= spec.stable_object_motion
-            passed = distance_ratio <= 1.0 and aperture_ratio >= 1.0 and stable
+            on_goal = task_truth.target_on_goal if task_truth else None
+            grasped = task_truth.target_grasped if task_truth else None
+            if spec.require_place_truth:
+                placed = (
+                    on_goal is True
+                    and task_truth is not None
+                    and task_truth.bddl_goal_matches is True
+                )
+            else:
+                placed = distance_ratio <= 1.0
+            if spec.require_grasp_truth:
+                detached = grasped is False
+            else:
+                detached = grasped is not True
+            passed = placed and detached and aperture_ratio >= 1.0 and stable
             confidence = min(1.0 - distance_ratio, aperture_ratio - 1.0)
             return passed, float(np.clip(confidence, 0.0, 1.0))
         raise KeyError(f"Unknown pick-and-place event: {event_name}")
@@ -315,6 +508,7 @@ class PickPlaceSubEventDetector:
         *,
         step: int,
         info: Optional[Mapping[str, Any]] = None,
+        task_truth: Optional[PickPlaceTaskTruth] = None,
     ) -> Optional[SubEventTransition]:
         """Evaluate the next event and emit at most one ordered transition."""
 
@@ -325,10 +519,13 @@ class PickPlaceSubEventDetector:
                 obs, f"{self.spec.target_object}_pos", 3
             )
             self._last_features = features
+            self._last_task_truth = task_truth
             return None
 
-        overridden = _event_override(info, event_name)
-        passed, confidence = self._predicate(event_name, features)
+        overridden = self.spec.allow_info_event_overrides and _event_override(
+            info, event_name
+        )
+        passed, confidence = self._predicate(event_name, features, task_truth)
         if overridden:
             passed, confidence = True, 1.0
         self._confirmation_count = self._confirmation_count + 1 if passed else 0
@@ -341,7 +538,23 @@ class PickPlaceSubEventDetector:
                 step=int(step),
                 confidence=float(confidence),
                 features=features.as_dict(),
-                source="explicit_info" if overridden else "observation_predicate",
+                source=(
+                    "synthetic_info_override"
+                    if overridden
+                    else "libero_task_truth"
+                    if task_truth is not None
+                    and event_name
+                    in {
+                        "grasp_completed",
+                        "object_lifted",
+                        "place_completed",
+                        "release_completed",
+                    }
+                    else "observation_predicate"
+                ),
+                task_truth=(
+                    task_truth.as_dict() if task_truth is not None else {}
+                ),
             )
             self.transitions.append(transition)
             self._confirmation_count = 0
@@ -350,6 +563,7 @@ class PickPlaceSubEventDetector:
             obs, f"{self.spec.target_object}_pos", 3
         )
         self._last_features = features
+        self._last_task_truth = task_truth
         return transition
 
     def summary(self) -> Dict[str, Any]:
@@ -360,6 +574,11 @@ class PickPlaceSubEventDetector:
             "transitions": [transition.to_summary() for transition in self.transitions],
             "last_features": (
                 self._last_features.as_dict() if self._last_features is not None else None
+            ),
+            "last_task_truth": (
+                self._last_task_truth.as_dict()
+                if self._last_task_truth is not None
+                else None
             ),
         }
 
@@ -434,7 +653,12 @@ class PickPlaceRiskAwareCheckpointManager:
         """Update the event graph and maybe capture one checkpoint."""
 
         policy_before_transition = self.current_edge_policy
-        transition = self.detector.update(obs, step=step, info=info)
+        task_truth = extract_pick_place_task_truth(
+            env, self.detector.spec, info=info
+        )
+        transition = self.detector.update(
+            obs, step=step, info=info, task_truth=task_truth
+        )
         common_metadata: Dict[str, Any] = dict(metadata or {})
         common_metadata.update(
             {
@@ -447,6 +671,8 @@ class PickPlaceRiskAwareCheckpointManager:
                 "completed_event_count": self.detector.current_event_index,
                 "last_completed_event": self.detector.last_completed_event,
                 "next_event": self.detector.next_event,
+                "task_truth": task_truth.as_dict(),
+                "event_detector_state": self.detector.snapshot_state(),
             }
         )
 
@@ -524,22 +750,32 @@ class PickPlaceRiskAwareCheckpointManager:
         env: Any,
         failure_step: int,
         *,
-        strategy: str = "latest_safe",
+        strategy: str = "latest_before_failure",
+        warning_onset_step: Optional[int] = None,
+        safety_margin_steps: int = 0,
         reload_xml: bool = False,
         rng: Optional[np.random.Generator] = None,
+        restore_rng: bool = True,
     ) -> Tuple[SemanticKeyframe, Dict[str, Any]]:
         keyframe, report = self.selector.restore_for_failure(
             env,
             failure_step,
             strategy=strategy,
+            warning_onset_step=warning_onset_step,
+            safety_margin_steps=safety_margin_steps,
             reload_xml=reload_xml,
             rng=rng,
+            restore_rng=restore_rng,
         )
         restored_obs = get_observation(env, force_update=False)
-        completed_count = int(
-            keyframe.checkpoint.metadata.get("completed_event_count", 0)
-        )
-        self.detector.restore_progress(completed_count, restored_obs)
+        detector_state = keyframe.checkpoint.metadata.get("event_detector_state")
+        if detector_state is not None:
+            self.detector.restore_state(detector_state, restored_obs)
+        else:
+            completed_count = int(
+                keyframe.checkpoint.metadata.get("completed_event_count", 0)
+            )
+            self.detector.restore_progress(completed_count, restored_obs)
         self.selector.reset_history(restored_obs)
         return keyframe, report
 
@@ -558,8 +794,10 @@ __all__ = [
     "PickPlaceRiskAwareCheckpointManager",
     "PickPlaceSubEventDetector",
     "PickPlaceTaskSpec",
+    "PickPlaceTaskTruth",
     "RiskAwareObservation",
     "SubEventTransition",
     "default_pick_place_edge_policies",
+    "extract_pick_place_task_truth",
     "load_pick_place_config",
 ]

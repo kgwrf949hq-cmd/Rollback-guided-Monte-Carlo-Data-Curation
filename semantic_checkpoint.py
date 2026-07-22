@@ -560,51 +560,103 @@ class SemanticKeyframeSelector:
             del self.keyframes[removable]
 
     def select_for_rollback(
-        self, failure_step: int, *, strategy: str = "latest_safe"
+        self,
+        failure_step: int,
+        *,
+        strategy: str = "latest_before_failure",
+        warning_onset_step: Optional[int] = None,
+        safety_margin_steps: int = 0,
     ) -> SemanticKeyframe:
-        """Select a checkpoint strictly before a detected failure.
+        """Select a checkpoint before a failure or a known warning onset.
 
-        ``latest_safe`` is the default because it minimizes lost progress.
-        ``best_score`` is useful for experiments that prefer a high-confidence
-        semantic transition over temporal proximity.
+        ``latest_before_failure`` is deliberately named as a temporal rule; it
+        makes no safety claim. ``latest_safe`` additionally requires a caller-
+        supplied warning onset and excludes the requested safety margin.
         """
 
+        if int(safety_margin_steps) < 0:
+            raise ValueError("safety_margin_steps must be non-negative")
+        cutoff = int(failure_step)
+        if strategy == "latest_safe":
+            if warning_onset_step is None:
+                raise ValueError(
+                    "latest_safe requires warning_onset_step; use "
+                    "latest_before_failure for a purely temporal rule"
+                )
+            cutoff = int(warning_onset_step) - int(safety_margin_steps)
         eligible = [
             keyframe
             for keyframe in self.keyframes
-            if keyframe.step < int(failure_step) and not keyframe.checkpoint.env_done
+            if keyframe.step < cutoff and not keyframe.checkpoint.env_done
         ]
         if not eligible:
-            eligible = [keyframe for keyframe in self.keyframes if keyframe.step < int(failure_step)]
-        if not eligible:
             raise LookupError(
-                "No checkpoint exists strictly before failure step "
-                f"{failure_step}; capture an episode-start keyframe first."
+                "No non-terminal checkpoint exists strictly before rollback cutoff "
+                f"{cutoff}; capture an episode-start keyframe or reduce the "
+                "safety margin."
             )
-        if strategy == "latest_safe":
+        if strategy in {"latest_safe", "latest_before_failure"}:
             return max(eligible, key=lambda keyframe: keyframe.step)
         if strategy == "best_score":
             return max(eligible, key=lambda keyframe: (keyframe.score, keyframe.step))
-        raise ValueError("strategy must be 'latest_safe' or 'best_score'")
+        raise ValueError(
+            "strategy must be 'latest_before_failure', 'latest_safe' or "
+            "'best_score'"
+        )
+
+    def prune_after(self, step: int) -> List[int]:
+        """Remove checkpoints belonging to the abandoned future branch."""
+
+        pruned = [keyframe.step for keyframe in self.keyframes if keyframe.step > int(step)]
+        self.keyframes = [
+            keyframe for keyframe in self.keyframes if keyframe.step <= int(step)
+        ]
+        return pruned
 
     def restore_for_failure(
         self,
         env: Any,
         failure_step: int,
         *,
-        strategy: str = "latest_safe",
+        strategy: str = "latest_before_failure",
+        warning_onset_step: Optional[int] = None,
+        safety_margin_steps: int = 0,
         reload_xml: bool = False,
         rng: Optional[np.random.Generator] = None,
+        restore_rng: bool = True,
+        prune_abandoned: bool = True,
     ) -> Tuple[SemanticKeyframe, Dict[str, Any]]:
         """Restore the selected semantic keyframe and return its report."""
 
-        keyframe = self.select_for_rollback(failure_step, strategy=strategy)
+        keyframe = self.select_for_rollback(
+            failure_step,
+            strategy=strategy,
+            warning_onset_step=warning_onset_step,
+            safety_margin_steps=safety_margin_steps,
+        )
         report = self.tool.restore(
             env,
             keyframe.checkpoint,
             reload_xml=reload_xml,
             rng=rng,
+            restore_rng=restore_rng,
         )
+        pruned_steps = (
+            self.prune_after(keyframe.step)
+            if prune_abandoned and report.get("success")
+            else []
+        )
+        report["checkpoint_selection"] = {
+            "strategy": strategy,
+            "failure_step": int(failure_step),
+            "warning_onset_step": warning_onset_step,
+            "safety_margin_steps": int(safety_margin_steps),
+            "selected_step": int(keyframe.step),
+            "pruned_abandoned_checkpoint_steps": pruned_steps,
+            "prune_skipped_due_restore_failure": bool(
+                prune_abandoned and not report.get("success")
+            ),
+        }
         return keyframe, report
 
     def summary(self) -> Dict[str, Any]:

@@ -16,7 +16,12 @@ from typing import Any, Deque, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
-from pick_place_checkpoint import PICK_PLACE_EVENTS, PickPlaceTaskSpec
+from pick_place_checkpoint import (
+    PICK_PLACE_EVENTS,
+    PickPlaceTaskSpec,
+    PickPlaceTaskTruth,
+    extract_pick_place_task_truth,
+)
 
 
 class FailureStatus(str, enum.Enum):
@@ -35,6 +40,7 @@ class FailureDecision:
     current_stage: str
     consecutive_steps: int
     hard_failure: bool
+    warning_onset_step: Optional[int]
     evidence: Dict[str, Any]
 
     @property
@@ -120,6 +126,10 @@ class FailureFrame:
     eef_pos: np.ndarray
     action_norm: float
     reward: float
+    target_grasped: Optional[bool]
+    target_on_goal: Optional[bool]
+    target_goal_contact: Optional[bool]
+    bddl_goal_matches: Optional[bool]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -184,6 +194,7 @@ class PickPlaceRuleFailureDetector:
         self._stage_start_step = 0
         self._active_reason: Optional[str] = None
         self._active_reason_steps = 0
+        self._active_reason_onset_step: Optional[int] = None
 
     def reset(self) -> None:
         self.history.clear()
@@ -194,6 +205,7 @@ class PickPlaceRuleFailureDetector:
         self._stage_start_step = 0
         self._active_reason = None
         self._active_reason_steps = 0
+        self._active_reason_onset_step = None
 
     def _terminal_decision(
         self,
@@ -208,6 +220,7 @@ class PickPlaceRuleFailureDetector:
         else:
             self._active_reason = reason
             self._active_reason_steps = 1
+            self._active_reason_onset_step = int(step)
         return FailureDecision(
             step=int(step),
             status=FailureStatus.TERMINAL_FAILURE,
@@ -216,6 +229,7 @@ class PickPlaceRuleFailureDetector:
             current_stage=stage,
             consecutive_steps=self._active_reason_steps,
             hard_failure=True,
+            warning_onset_step=self._active_reason_onset_step,
             evidence=evidence,
         )
 
@@ -227,6 +241,7 @@ class PickPlaceRuleFailureDetector:
         stage: str,
         action: Optional[np.ndarray],
         reward: float,
+        task_truth: Optional[PickPlaceTaskTruth],
     ) -> Tuple[Optional[FailureFrame], Optional[str]]:
         target, error = _finite_vector(
             obs, f"{self.task_spec.target_object}_pos", 3
@@ -272,6 +287,22 @@ class PickPlaceRuleFailureDetector:
                 eef_pos=eef,
                 action_norm=action_norm,
                 reward=float(reward),
+                target_grasped=(
+                    task_truth.target_grasped if task_truth is not None else None
+                ),
+                target_on_goal=(
+                    task_truth.target_on_goal if task_truth is not None else None
+                ),
+                target_goal_contact=(
+                    task_truth.target_goal_contact
+                    if task_truth is not None
+                    else None
+                ),
+                bddl_goal_matches=(
+                    task_truth.bddl_goal_matches
+                    if task_truth is not None
+                    else None
+                ),
             ),
             None,
         )
@@ -330,7 +361,12 @@ class PickPlaceRuleFailureDetector:
                 frame.eef_target_distance
                 > spec.grasp_distance * config.missed_grasp_distance_factor
             )
-            if closed and too_far:
+            missed = (
+                frame.target_grasped is False
+                if frame.target_grasped is not None
+                else too_far
+            )
+            if closed and missed:
                 candidates.append(
                     _FailureCandidate(
                         "missed_grasp",
@@ -344,6 +380,7 @@ class PickPlaceRuleFailureDetector:
                                 spec.grasp_distance
                                 * config.missed_grasp_distance_factor
                             ),
+                            "target_grasped": frame.target_grasped,
                         },
                     )
                 )
@@ -368,7 +405,12 @@ class PickPlaceRuleFailureDetector:
                 frame.eef_target_distance
                 > spec.grasp_distance * config.lost_grasp_distance_factor
             )
-            if lost_distance:
+            grasp_lost = (
+                frame.target_grasped is False
+                if frame.target_grasped is not None
+                else lost_distance
+            )
+            if grasp_lost:
                 candidates.append(
                     _FailureCandidate(
                         "grasp_lost_before_lift",
@@ -380,6 +422,7 @@ class PickPlaceRuleFailureDetector:
                             "maximum_attached_distance": (
                                 spec.grasp_distance * config.lost_grasp_distance_factor
                             ),
+                            "target_grasped": frame.target_grasped,
                         },
                     )
                 )
@@ -439,9 +482,14 @@ class PickPlaceRuleFailureDetector:
         elif frame.stage == "release_completed":
             gripper_open = frame.gripper_aperture >= spec.gripper_open_aperture
             outside_goal = (
-                frame.target_goal_distance
-                > spec.place_distance * config.wrong_place_distance_factor
+                frame.bddl_goal_matches is True
+                and frame.target_on_goal is False
             )
+            if frame.target_on_goal is None and not spec.require_place_truth:
+                outside_goal = (
+                    frame.target_goal_distance
+                    > spec.place_distance * config.wrong_place_distance_factor
+                )
             if gripper_open and outside_goal:
                 candidates.append(
                     _FailureCandidate(
@@ -454,6 +502,9 @@ class PickPlaceRuleFailureDetector:
                             "maximum_release_distance": (
                                 spec.place_distance * config.wrong_place_distance_factor
                             ),
+                            "target_on_goal": frame.target_on_goal,
+                            "target_goal_contact": frame.target_goal_contact,
+                            "bddl_goal_matches": frame.bddl_goal_matches,
                         },
                     )
                 )
@@ -472,13 +523,14 @@ class PickPlaceRuleFailureDetector:
             maximum_height = self._maximum_target_height or frame.target_height
             height_drop = maximum_height - frame.target_height
             detached = (
-                frame.eef_target_distance
+                frame.target_grasped is False
+                if frame.target_grasped is not None
+                else frame.eef_target_distance
                 > spec.grasp_distance * config.lost_grasp_distance_factor
             )
             safely_at_goal = (
-                "place_completed" in set(completed_events)
-                and frame.target_goal_distance
-                <= spec.place_distance * config.wrong_place_distance_factor
+                frame.bddl_goal_matches is True
+                and frame.target_on_goal is True
             )
             if height_drop >= config.drop_height and detached and not safely_at_goal:
                 candidates.append(
@@ -494,6 +546,8 @@ class PickPlaceRuleFailureDetector:
                             "eef_target_distance": frame.eef_target_distance,
                             "detached": detached,
                             "safely_at_goal": safely_at_goal,
+                            "target_on_goal": frame.target_on_goal,
+                            "target_goal_contact": frame.target_goal_contact,
                         },
                     )
                 )
@@ -551,6 +605,7 @@ class PickPlaceRuleFailureDetector:
         if candidate is None:
             self._active_reason = None
             self._active_reason_steps = 0
+            self._active_reason_onset_step = None
             return FailureDecision(
                 step=int(step),
                 status=FailureStatus.NORMAL,
@@ -559,6 +614,7 @@ class PickPlaceRuleFailureDetector:
                 current_stage=stage,
                 consecutive_steps=0,
                 hard_failure=False,
+                warning_onset_step=None,
                 evidence={},
             )
 
@@ -567,6 +623,7 @@ class PickPlaceRuleFailureDetector:
         else:
             self._active_reason = candidate.reason
             self._active_reason_steps = 1
+            self._active_reason_onset_step = int(step)
 
         risk = float(np.clip(candidate.risk, 0.0, 1.0))
         if candidate.terminal:
@@ -590,6 +647,7 @@ class PickPlaceRuleFailureDetector:
             current_stage=stage,
             consecutive_steps=self._active_reason_steps,
             hard_failure=candidate.hard,
+            warning_onset_step=self._active_reason_onset_step,
             evidence=dict(candidate.evidence),
         )
 
@@ -603,8 +661,16 @@ class PickPlaceRuleFailureDetector:
         reward: float = 0.0,
         done: bool = False,
         info: Optional[Mapping[str, Any]] = None,
+        env: Any = None,
+        task_truth: Optional[PickPlaceTaskTruth] = None,
+        success: Optional[bool] = None,
     ) -> FailureDecision:
         """Return a failure decision without mutating any environment state."""
+
+        if task_truth is None and env is not None:
+            task_truth = extract_pick_place_task_truth(
+                env, self.task_spec, info=info
+            )
 
         stage = stage_from_completed_events(completed_events)
         if stage != self._current_stage:
@@ -612,6 +678,7 @@ class PickPlaceRuleFailureDetector:
             self._stage_start_step = int(step)
             self._active_reason = None
             self._active_reason_steps = 0
+            self._active_reason_onset_step = None
             self.history.clear()
 
         if _info_flag(info, ("sim_error", "simulation_error", "fatal_error")):
@@ -628,8 +695,18 @@ class PickPlaceRuleFailureDetector:
         explicit_recoverable = _info_flag(
             info, ("failure", "recoverable_failure", "collision")
         )
-        success = _info_flag(info, ("success", "is_success", "task_success"))
-        if done and not success:
+        resolved_success = success
+        success_source = "argument" if success is not None else "unavailable"
+        if resolved_success is None and task_truth is not None:
+            resolved_success = task_truth.task_success
+            success_source = task_truth.sources.get("task_success", "task_truth")
+        if resolved_success is None and isinstance(info, Mapping):
+            for key in ("success", "is_success", "task_success"):
+                if key in info:
+                    resolved_success = bool(info[key])
+                    success_source = f"info.{key}"
+                    break
+        if done and resolved_success is not True:
             explicit_terminal = True
 
         frame, extraction_error = self._extract_frame(
@@ -638,6 +715,7 @@ class PickPlaceRuleFailureDetector:
             stage=stage,
             action=action,
             reward=reward,
+            task_truth=task_truth,
         )
         if extraction_error is not None or frame is None:
             decision = self._terminal_decision(
@@ -658,6 +736,28 @@ class PickPlaceRuleFailureDetector:
             else frame.target_height,
         )
 
+        if resolved_success is True:
+            self._active_reason = None
+            self._active_reason_steps = 0
+            self._active_reason_onset_step = None
+            decision = FailureDecision(
+                step=int(step),
+                status=FailureStatus.NORMAL,
+                risk_score=0.0,
+                reason=None,
+                current_stage=stage,
+                consecutive_steps=0,
+                hard_failure=False,
+                warning_onset_step=None,
+                evidence={
+                    "task_success": True,
+                    "success_source": success_source,
+                },
+            )
+            self.history.append(frame)
+            self.decisions.append(decision)
+            return decision
+
         candidates = self._global_candidates(frame)
         candidates.extend(self._stage_candidates(frame, completed_events))
         if explicit_terminal:
@@ -667,7 +767,12 @@ class PickPlaceRuleFailureDetector:
                     1.0,
                     True,
                     True,
-                    {"done": bool(done), "info": dict(info or {})},
+                    {
+                        "done": bool(done),
+                        "task_success": resolved_success,
+                        "success_source": success_source,
+                        "info": dict(info or {}),
+                    },
                 )
             )
         elif explicit_recoverable:

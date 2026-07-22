@@ -157,6 +157,8 @@ def main() -> None:
             "success": bool(
                 len(selector.keyframes) >= 2
                 and selected.step < failure_step
+                and restore_report["success"]
+                and initial_report["comparison_valid"]
                 and initial_report.get("integration_state_max_abs_diff") <= 1e-10
                 and replay_report["success"]
             ),

@@ -19,6 +19,7 @@ import json
 import logging
 import math
 import pathlib
+import sys
 import time
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
@@ -34,6 +35,7 @@ from libero_rollback_tool import (
     make_action,
     make_libero_env,
     step_env,
+    task_success_signal,
     write_video_or_frames,
 )
 from semantic_checkpoint import SemanticKeyframeConfig, SemanticKeyframeSelector
@@ -42,8 +44,23 @@ from pick_place_checkpoint import (
     PickPlaceTaskSpec,
     load_pick_place_config,
 )
-from openpi_client import image_tools
-from openpi_client import websocket_client_policy
+try:
+    from openpi_client import image_tools
+    from openpi_client import websocket_client_policy
+except ModuleNotFoundError:
+    # The openpi-server checkout contains the pure-Python client source even
+    # when it is not installed into the LIBERO Python 3.8 environment.
+    local_client_src = (
+        pathlib.Path(__file__).resolve().parent
+        / "packages"
+        / "openpi-client"
+        / "src"
+    )
+    if not local_client_src.is_dir():
+        raise
+    sys.path.insert(0, str(local_client_src))
+    from openpi_client import image_tools
+    from openpi_client import websocket_client_policy
 
 
 LIBERO_DUMMY_ACTION = [0.0] * 6 + [-1.0]
@@ -369,6 +386,8 @@ def run_demo(args: argparse.Namespace) -> Dict[str, Any]:
     restore_validation: Optional[Dict[str, Any]] = None
     rollback_done = False
     done = False
+    task_success: Optional[bool] = None
+    task_success_source = "unavailable"
     policy_queries = 0
     restored_policy_steps = 0
     action_plan_restored = False
@@ -466,6 +485,7 @@ def run_demo(args: argparse.Namespace) -> Dict[str, Any]:
         while t < args.max_steps:
             if t < args.num_steps_wait:
                 obs, _reward, done, _info = step_env(env, LIBERO_DUMMY_ACTION)
+                task_success, task_success_source = task_success_signal(env, _info)
                 t += 1
                 if args.checkpoint_policy == "semantic":
                     semantic_checkpoint = capture_semantic_checkpoint(
@@ -640,6 +660,7 @@ def run_demo(args: argparse.Namespace) -> Dict[str, Any]:
             )
             policy_queries += int(queried)
             obs, _reward, done, _info = step_env(env, action.tolist())
+            task_success, task_success_source = task_success_signal(env, _info)
             t += 1
             if args.checkpoint_policy == "semantic":
                 semantic_checkpoint = capture_semantic_checkpoint(
@@ -689,14 +710,24 @@ def run_demo(args: argparse.Namespace) -> Dict[str, Any]:
             append_frame(frames, obs, phase, "env step %03d" % t, color)
 
             if done:
-                append_frame(
-                    frames,
-                    obs,
-                    "TASK SUCCESS",
-                    "env reported done at step %03d" % t,
-                    (42, 146, 96),
-                    repeats=args.hold_frames,
-                )
+                if task_success is True:
+                    append_frame(
+                        frames,
+                        obs,
+                        "TASK SUCCESS",
+                        "check_success=True at env step %03d" % t,
+                        (42, 146, 96),
+                        repeats=args.hold_frames,
+                    )
+                else:
+                    append_frame(
+                        frames,
+                        obs,
+                        "EPISODE TERMINATED",
+                        "done without verified success at env step %03d" % t,
+                        (190, 58, 52),
+                        repeats=args.hold_frames,
+                    )
                 break
             if rollback_done and restored_policy_steps >= args.post_restore_steps:
                 append_frame(
@@ -710,9 +741,19 @@ def run_demo(args: argparse.Namespace) -> Dict[str, Any]:
                 break
 
         video_result = write_video_or_frames(frames, pathlib.Path(args.video_output), args.video_fps)
+        outcome = (
+            "success"
+            if task_success is True
+            else "terminated_without_success"
+            if done
+            else "incomplete"
+        )
         report = {
-            "success": True,
-            "task_done": bool(done),
+            "run_ok": True,
+            "task_success": task_success,
+            "task_success_source": task_success_source,
+            "episode_done": bool(done),
+            "outcome": outcome,
             "rollback_performed": bool(rollback_done),
             "rollback_trigger": "demo_failure_step",
             "checkpoint_policy": args.checkpoint_policy,
@@ -743,7 +784,10 @@ def run_demo(args: argparse.Namespace) -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - report should survive demo failures.
         logging.exception("Rollback rollout demo failed")
         report = {
-            "success": False,
+            "run_ok": False,
+            "task_success": task_success,
+            "task_success_source": task_success_source,
+            "outcome": "runner_error",
             "error": repr(exc),
             "rollback_performed": bool(rollback_done),
             "checkpoint_steps": checkpoint_steps,
@@ -772,7 +816,7 @@ def main() -> None:
     elapsed = time.time() - started
     print(json.dumps(report, indent=2, sort_keys=True))
     print("Elapsed seconds: %.2f" % elapsed)
-    if not report.get("success"):
+    if not report.get("run_ok"):
         raise SystemExit(1)
 
 
