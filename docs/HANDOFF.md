@@ -1,14 +1,14 @@
 # Rollback-guided Monte Carlo Data Curation 交接文档
 
-最后核对：2026-07-22，约 14:00 CST
+最后核对：2026-07-22（第一版 coordinator 本地验证后）
 
 ## 0. 新对话先读结论
 
 当前项目的准确定位是：
 
-> 已完成“单任务、短轨迹、当前 LIBERO/MuJoCo 配置、原生 `mjSTATE_INTEGRATION` 路径”的确定性恢复原型，并修复了一批会造成验证假阳性和标签污染的问题；尚未实现蒙特卡洛分支 coordinator、自动回退闭环、真实 pi0.5 有效性评估或数据集 writer。
+> 已完成“单任务、短轨迹、当前 LIBERO/MuJoCo 配置、原生 `mjSTATE_INTEGRATION` 路径”的确定性恢复原型，并实现单进程、内存态、预算受限 FIFO/BFS 的第一版蒙特卡洛 curation coordinator；尚未接入真实 pi0.5 自动分支闭环、真实策略有效性评估或数据集 writer。
 
-因此下一阶段可以开始写“小规模、无副作用、可验证的蒙特卡洛分支与回退点选择代码”，但不应开始批量采集，也不应把当前产物称为优质数据集。
+第一版 coordinator 已通过无需 LIBERO/policy server 的确定性 fixture；下一阶段应接入真实 pi0.5 shadow mode 和小规模远端验证，但不应开始批量采集，也不应把当前内存产物称为优质数据集。
 
 最重要的数据约定：
 
@@ -55,12 +55,16 @@ git diff
 | 文件 | SHA-256 |
 | --- | --- |
 | `libero_rollback_tool.py` | `03d9687a0ddb3f0af2de3e3a6a294a6b38d0877cd8049cacbc0dbf668f5fdfef` |
-| `semantic_checkpoint.py` | `61b28e4003d05c9b83019e478fcecaf1bfc5594f2b03bfcdbc6c2450a805574b` |
+| `semantic_checkpoint.py` | `e406ef1f35475a06edc9fbf305adc02251de13eb7170299fc9173c0f508adc44` |
 | `pick_place_checkpoint.py` | `4d4019944363aea367c6a53cd9d715cca5b0e5cd105641d712c1c5cd98f7bde9` |
-| `pick_place_failure.py` | `46c00e8494879875e6c6e922dc362ae5d783f1032cf2a27e3ae4879dd6fb28a8` |
+| `pick_place_failure.py` | `97d7bc87d9a833f4fc32f6d43fc263ae22c7aa265ca9874a52241e410c52f311` |
+| `rollback_policy.py` | `83a1c3923c07cba9da94b557dfdceeea994c882c88112b3cc73edfbc1d7e3683` |
+| `monte_carlo_coordinator.py` | `df908135808553ff4bc40519f80641373c645784d22daf56c5405bd8065aa9bf` |
 | `pi05_libero_rollback_rollout.py` | `ed6ad6fcebf64b15e9a26d253d4c6e24496fff738f77572587cab30a245af31a` |
 | `configs/pick_place/libero_spatial_task0.json` | `e270d6664497a7f363eeb4530207d782e1afdd25d897b4fc0d35e8f346b1db4e` |
 | `validation/rollback_regression_validation.py` | `ef86d188ff2d8a31d911f3aa23c7ee602672cb6102f382a520186a08b3e42527` |
+| `validation/monte_carlo_coordinator_validation.py` | `914ba252854c0bbc174ade3d6ba0fbfd8f49a59611dcca860aca1cbd6ca205d8` |
+| `validation/rollback_policy_validation.py` | `7e31a4c6a02de05bcd9c15a9ac3fb1e547971b42918b3973e77bfdabc8b7466b` |
 
 ---
 
@@ -76,10 +80,14 @@ PickPlaceRiskAwareCheckpointManager
 
 PickPlaceRuleFailureDetector    无副作用失败检测，只返回 FailureDecision
 
+RollbackPolicy                  无副作用回退点选择，返回可审计 RollbackSelection
+
+MonteCarloCoordinator           curation-only FIFO/BFS、lineage、预算与副作用
+
 pi05_libero_rollback_rollout.py 单次演示脚本；仍不是蒙特卡洛 coordinator
 ```
 
-三个层次仍未组成自动闭环。失败检测器不应直接 restore、采样或写数据；下一阶段应新增独立 coordinator 管理这些副作用。
+coordinator 已将上述层次组成可测试的内存闭环。失败检测器和回退策略都不直接 restore、采样或写数据；所有副作用由 coordinator 管理。真实 pi0.5 demo 尚未切换到该 coordinator。
 
 ---
 
@@ -228,19 +236,16 @@ tool.restore(env, checkpoint, rng=branch_rng, restore_rng=False)
 以下内容仍然不存在：
 
 - pi0.5 policy server 闭环；
-- 多分支蒙特卡洛 coordinator；
-- branch lineage 和稳定 branch/checkpoint ID；
-- branch-local checkpoint 候选集合与祖先链过滤；
-- failure detector 的 snapshot/restore（当前只有 `reset()`）；
-- 候选分支评分、选择、去重；
-- 每节点最大分支数、最大深度、重试上限；
-- 重复失败签名与循环回退保护；
-- episode/transition 数据格式与 writer；
+- 真实 pi0.5 sampling seed / 多 action candidate 协议；
+- 候选分支质量评分、winner 选择与 action proposal 去重；
+- durable episode/transition writer、原子落盘和断点恢复；
 - provenance、代码/配置版本、校验和；
 - train/validation 按 root episode 或 init state 隔离划分；
 - 真实成功、missed grasp、drop、collision、wrong placement 的人工真值与指标。
 
 `pi05_libero_rollback_rollout.py` 仍然只是一次人工坏动作分支的演示，不能扩展几行循环后就称为蒙特卡洛系统。
+
+当前已经实现但只在内存/fake environment 中验收的内容包括：稳定 branch/checkpoint ID、完整 transition/lineage、branch-local checkpoint view、failure/selector/subevent 状态恢复、full-horizon FIFO/BFS、最大分支/深度/重试预算、重复失败保护、quarantine、可重复 branch RNG 和 JSON 可序列化摘要。
 
 ---
 
@@ -271,16 +276,18 @@ tool.restore(env, checkpoint, rng=branch_rng, restore_rng=False)
 
 ---
 
-## 7. 下一阶段实现任务：蒙特卡洛分支 coordinator
+## 7. 已实现：第一版蒙特卡洛分支 coordinator
 
-建议新增：
+已新增：
 
 ```text
 monte_carlo_coordinator.py
+rollback_policy.py
 validation/monte_carlo_coordinator_validation.py
+validation/rollback_policy_validation.py
 ```
 
-第一版只做单进程、小规模、内存中的 branch records；不要先写大规模 writer，也不要依赖 policy server 才能测试。
+当前第一版只做单进程、小规模、内存中的 branch records；不包含大型 writer，也不依赖 policy server 才能测试。运行语义已经确定为 curation-only：成功只结束当前 branch，不取消 frontier 中的 sibling；每条 branch 都运行到成功、确认失败、done 或完整 episode horizon。BFS depth 是 fork/rollback 层数，不是轨迹步数。
 
 ### 7.1 必需的数据结构
 
@@ -326,41 +333,55 @@ coordinator 才能执行副作用：
 2. 调用 checkpoint manager 观察并捕获候选点；
 3. 调用失败检测器取得无副作用 `FailureDecision`；
 4. 将原失败 branch 标记结束但完整保留；
-5. 根据 warning onset 和安全余量选择 fork checkpoint；
+5. 向独立 rollback policy 提供 branch-local checkpoint 候选并执行其选择结果；
 6. 创建新的 child/sibling branch record；
 7. 用 `restore_rng=False` 恢复仿真，用 `make_branch_rng()` 初始化该 child；
 8. 恢复或重建 checkpoint manager、subevent detector 和 failure detector 的 branch-local 历史，避免 sibling 污染；
 9. 默认清空旧 policy action chunk 并重新规划；
-10. restore 成功后只剪当前 branch 的活动 checkpoint 候选；
+10. restore 成功后让 child 只继承 fork 之前的活动 checkpoint view，不删除全局 checkpoint 或父分支数据；
 11. 根据最大深度、分支数、重试数和重复失败签名停止扩展。
 
-当前 subevent detector 已有 `snapshot_state()/restore_state()`，checkpoint manager 会把它写入 checkpoint metadata；当前 failure detector 只有 `reset()`，不能正确恢复中途分支的 history、初始/最大物体高度、stage 起点和 warning 连续计数。第一版 coordinator 应同时为 failure detector 补充可序列化的 `snapshot_state()/restore_state()` 并加入测试，或者使用等价的 branch-local 状态对象。仅在回退时调用 `reset()` 会改变检测语义，不可接受。
+subevent、semantic selector 和 failure detector 现在都具备 coordinator 所需的 snapshot/restore。failure detector 会恢复 history、初始/最大物体高度、stage 起点和 warning 连续计数；审计 decisions 留在原 branch，不复制到 sibling。
 
-不要让 `PickPlaceRuleFailureDetector`、`SemanticKeyframeSelector` 或数据 writer 反向控制环境。
+不要让 `PickPlaceRuleFailureDetector`、`SemanticKeyframeSelector`、`RollbackPolicy` 或数据 writer 反向控制环境。
 
-### 7.3 第一版回退选择规则
+### 7.3 已实现的回退选择规则
 
-建议明确写成：
+`rollback_policy.py` 已将“回退到哪一步”从 coordinator 抽成可注入的纯策略。默认使用 `StageAwareRollbackPolicy`，不需要人工为每次失败填 step：
 
 ```text
-recoverable failure 且 warning_onset_step 已知
-    → latest_safe(warning_onset_step, safety_margin_steps)
+missed grasp / grasp timeout
+    → approach_object 事件完成点
 
-recoverable failure 但 warning_onset_step 未知
-    → latest_before_failure
-    → selection_basis="temporal_only"
-    → 不允许在报告里称为 safe
+lift failure
+    → grasp_completed，缺失时再尝试 approach_object
 
-terminal failure
-    → 当前 branch 必须终止并保留
-    → 是否从祖先开新 branch 由 Monte Carlo 预算决定
+object dropped
+    → object_lifted，缺失时再尝试 grasp_completed
 
-没有 eligible checkpoint
-    → 不回退、不删除原轨迹
-    → outcome="no_eligible_checkpoint"
+placement failure
+    → object_lifted，缺失时再尝试 grasp_completed
+
+release failure
+    → place_completed，缺失时再尝试 object_lifted
+
+未配置的 failure reason
+    → 根据 current_stage 自动推导 predecessor anchor
 ```
 
-回退点不是“越近越好”的单一问题。第一版先用现有规则保证语义正确；后续再加入候选评分，例如：
+事件锚点只认真实 `subevent_completion`、对应的 `subevent_transition.event_name` 或事件 label；不会把“历史上完成过该事件”的更晚普通 checkpoint 误当成锚点。所有语义锚点还必须满足时间硬约束：
+
+```text
+warning_onset_step 已知
+    → checkpoint.step < warning_onset_step - safety_margin_steps
+
+warning_onset_step 未知
+    → checkpoint.step < failure_step
+```
+
+请求的语义锚点缺失或不在 cutoff 前时，自动委托 `TemporalRollbackPolicy`：前一种情况使用严格 `latest_safe`，warning onset 缺失时使用 `latest_before_failure` 且 `selection_basis="temporal_only"`。没有 eligible checkpoint 时不回退也不删除失败轨迹。
+
+`RollbackSelection` 保留 requested/selected anchor、fallback 原因、cutoff、每个候选的拒绝原因、评分分解与排名。当前每次失败仍只选一个 checkpoint，尚未同时比较多个回退点或实现 learned scoring。后续可增加：
 
 ```text
 progress retained
@@ -399,7 +420,7 @@ progress retained
 10. coordinator 输出可序列化摘要，且两次同 seed 运行结构一致。
 11. 从 sibling A 回到祖先再创建 sibling B 时，checkpoint 候选、subevent 状态和 failure history 不受 sibling A 污染。
 
-通过上述测试后，再接入真实 pi0.5 shadow mode。
+上述 coordinator 测试由 `validation/monte_carlo_coordinator_validation.py` 的确定性 fake environment 覆盖；回退规则由 `validation/rollback_policy_validation.py` 单独覆盖。它们不是 LIBERO/pi0.5 有效性证据；下一步才是接入真实 pi0.5 shadow mode。
 
 ---
 
@@ -428,7 +449,7 @@ OSMesa 短验证可避免占用 CUDA：
 MUJOCO_GL=osmesa CUDA_VISIBLE_DEVICES="" PYTHONPATH=. python3 <validation_script.py>
 ```
 
-不要把 policy server 未启动、GPU 忙、磁盘不足误写成算法已闭环后的“部署小问题”；目前算法层的 coordinator 和 writer 本身也尚未实现。
+不要把 policy server 未启动、GPU 忙、磁盘不足误写成“部署小问题”；虽然内存态 coordinator 已实现，真实策略闭环和 writer 仍不存在。
 
 ---
 
@@ -445,9 +466,12 @@ MUJOCO_GL=osmesa CUDA_VISIBLE_DEVICES="" \
 PYTHONPATH=. python validation/semantic_keyframe_rollback_validation.py
 PYTHONPATH=. python validation/pick_place_checkpoint_validation.py
 PYTHONPATH=. python validation/pick_place_failure_validation.py
+PYTHONPATH=. python validation/rollback_policy_validation.py
+PYTHONPATH=. python validation/monte_carlo_coordinator_validation.py
 python -m py_compile \
   libero_rollback_tool.py semantic_checkpoint.py \
-  pick_place_checkpoint.py pick_place_failure.py \
+  pick_place_checkpoint.py pick_place_failure.py rollback_policy.py \
+  monte_carlo_coordinator.py \
   pi05_libero_rollback_rollout.py
 ```
 
@@ -475,7 +499,7 @@ python -m py_compile \
 
 可直接把下面内容交给新对话：
 
-> 请先完整阅读 `docs/HANDOFF.md`，确认当前位于已同步的 `main` 且 worktree clean，不要覆盖现有修复。然后实现 `monte_carlo_coordinator.py` 和 `validation/monte_carlo_coordinator_validation.py`。第一版只做单进程、小规模、内存中的 branch records 与回退点选择，不启动批量采集、不实现大型 writer。失败轨迹必须完整保留；checkpoint 剪枝只影响活动候选集合。使用 `make_branch_rng(root_seed, branch_id)` 和 `restore_rng=False` 创建独立子分支；`latest_safe` 必须带 `warning_onset_step` 和安全余量。先通过 handoff 第 7.5 节的确定性验收测试，再考虑接入 pi0.5 shadow mode。
+> 请先完整阅读 `docs/HANDOFF.md`，确认第一版 curation coordinator 的本地验证通过且不要覆盖现有修复。下一步把 `StructuredActionChunkSampler` 通过 callback 接到真实 pi0.5 shadow mode，先验证相同 checkpoint/seed 的动作可重复性、失败检测指标和 rollback proposal，不启动批量采集、不实现大型 writer。若 policy server 暴露原生 sampling seed，则使用原生采样且不叠加人工动作噪声；否则同一 fork 共享基础 policy seed，只改变结构化动作扰动。环境多样性放在不同 root episode/init state，不在同一 sibling 中同时改变环境与动作。
 
 ## 12. 禁止继续使用的旧结论
 
@@ -488,4 +512,4 @@ python -m py_compile \
 - “图像差异缺失也可视为 replay PASS”；
 - “run_ok/success=True 表示 LIBERO 任务成功”；
 - “失败分支应剪掉或不进入数据集”；
-- “当前已经实现蒙特卡洛采样系统或数据集生成系统”。
+- “当前已经完成真实 pi0.5 自动蒙特卡洛采集或数据集生成系统”。

@@ -4,6 +4,8 @@
 
 `pick_place_failure.py` 只检测失败并返回结构化结果，不捕获/选择 checkpoint，不调用 restore，不 replay 动作，也不直接终止环境。上层系统之后可以消费 `FailureDecision`，但检测器本身没有这些副作用。
 
+为支持蒙特卡洛 sibling 隔离，检测器提供 JSON 可序列化的 `snapshot_state()/restore_state()`。快照包含 history window、初始/最大物体高度、stage 起点、active reason、warning onset 和连续确认计数；历史 decisions 作为 branch 审计数据由 coordinator 保存，不复制到新 sibling。
+
 ## 输入和输出
 
 输入：

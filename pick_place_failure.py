@@ -207,6 +207,90 @@ class PickPlaceRuleFailureDetector:
         self._active_reason_steps = 0
         self._active_reason_onset_step = None
 
+    def snapshot_state(self) -> Dict[str, Any]:
+        """Return the branch-local logical state used by failure detection.
+
+        ``decisions`` is deliberately not included. Decisions are audit data
+        owned by the branch record, while the fields below are the minimal
+        state that changes future detector outputs after a rollback.  The
+        returned mapping is JSON-serializable so it can later be embedded in a
+        dataset manifest without relying on Python object identity.
+        """
+
+        history = []
+        for frame in self.history:
+            item = dataclasses.asdict(frame)
+            item["target_pos"] = frame.target_pos.tolist()
+            item["eef_pos"] = frame.eef_pos.tolist()
+            history.append(item)
+        return {
+            "schema_version": 1,
+            "target_object": self.task_spec.target_object,
+            "goal_object": self.task_spec.goal_object,
+            "history_window": int(self.config.history_window),
+            "history": history,
+            "initial_target_height": self._initial_target_height,
+            "maximum_target_height": self._maximum_target_height,
+            "current_stage": self._current_stage,
+            "stage_start_step": int(self._stage_start_step),
+            "active_reason": self._active_reason,
+            "active_reason_steps": int(self._active_reason_steps),
+            "active_reason_onset_step": self._active_reason_onset_step,
+        }
+
+    def restore_state(self, state: Optional[Mapping[str, Any]]) -> None:
+        """Restore a state produced by :meth:`snapshot_state`.
+
+        Detector audit decisions start empty for the new child branch.  The
+        coordinator records the ancestor decisions separately through branch
+        lineage, so copying them here would contaminate sibling summaries.
+        """
+
+        saved = dict(state or {})
+        version = int(saved.get("schema_version", 1))
+        if version != 1:
+            raise ValueError(f"unsupported failure detector state version: {version}")
+        if saved.get("target_object", self.task_spec.target_object) != self.task_spec.target_object:
+            raise ValueError("failure detector target object does not match checkpoint")
+        if saved.get("goal_object", self.task_spec.goal_object) != self.task_spec.goal_object:
+            raise ValueError("failure detector goal object does not match checkpoint")
+        if int(saved.get("history_window", self.config.history_window)) != int(
+            self.config.history_window
+        ):
+            raise ValueError("failure detector history window does not match checkpoint")
+
+        restored_history: Deque[FailureFrame] = collections.deque(
+            maxlen=self.config.history_window
+        )
+        for raw_frame in saved.get("history", ()):
+            if not isinstance(raw_frame, Mapping):
+                raise ValueError("failure detector history frame must be a mapping")
+            item = dict(raw_frame)
+            item["target_pos"] = np.asarray(item.get("target_pos"), dtype=np.float64)
+            item["eef_pos"] = np.asarray(item.get("eef_pos"), dtype=np.float64)
+            if item["target_pos"].shape != (3,) or item["eef_pos"].shape != (3,):
+                raise ValueError("failure detector history positions must have shape (3,)")
+            restored_history.append(FailureFrame(**item))
+
+        self.history = restored_history
+        self.decisions.clear()
+        initial_height = saved.get("initial_target_height")
+        maximum_height = saved.get("maximum_target_height")
+        self._initial_target_height = (
+            float(initial_height) if initial_height is not None else None
+        )
+        self._maximum_target_height = (
+            float(maximum_height) if maximum_height is not None else None
+        )
+        current_stage = saved.get("current_stage")
+        self._current_stage = str(current_stage) if current_stage is not None else None
+        self._stage_start_step = int(saved.get("stage_start_step", 0))
+        active_reason = saved.get("active_reason")
+        self._active_reason = str(active_reason) if active_reason is not None else None
+        self._active_reason_steps = max(0, int(saved.get("active_reason_steps", 0)))
+        onset = saved.get("active_reason_onset_step")
+        self._active_reason_onset_step = int(onset) if onset is not None else None
+
     def _terminal_decision(
         self,
         *,

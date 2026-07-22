@@ -238,6 +238,50 @@ class SemanticKeyframeSelector:
         self._previous_progress = None
         self._last_decision = None
 
+    def snapshot_state(self) -> Dict[str, Any]:
+        """Snapshot temporal feature history without copying checkpoint data.
+
+        The current observation is already stored by ``Checkpoint``.  Keeping
+        only the remaining temporal fields avoids duplicating camera images in
+        coordinator metadata while still making sibling checkpoint selection
+        independent of the abandoned branch future.
+        """
+
+        return {
+            "schema_version": 1,
+            "previous_reward": self._previous_reward,
+            "previous_eef_delta": (
+                self._previous_eef_delta.tolist()
+                if self._previous_eef_delta is not None
+                else None
+            ),
+            "previous_progress": self._previous_progress,
+        }
+
+    def restore_state(
+        self,
+        state: Optional[Mapping[str, Any]],
+        obs: Optional[Mapping[str, Any]],
+    ) -> None:
+        """Restore temporal history at a branch fork checkpoint."""
+
+        saved = dict(state or {})
+        version = int(saved.get("schema_version", 1))
+        if version != 1:
+            raise ValueError(f"unsupported semantic selector state version: {version}")
+        self._previous_obs = copy_obs(obs)
+        reward = saved.get("previous_reward")
+        self._previous_reward = float(reward) if reward is not None else None
+        eef_delta = saved.get("previous_eef_delta")
+        self._previous_eef_delta = (
+            np.asarray(eef_delta, dtype=np.float64).reshape(-1).copy()
+            if eef_delta is not None
+            else None
+        )
+        progress = saved.get("previous_progress")
+        self._previous_progress = float(progress) if progress is not None else None
+        self._last_decision = None
+
     def observe_only(
         self,
         env: Any,
