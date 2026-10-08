@@ -1,0 +1,427 @@
+{
+  "models": {
+    "aux": {
+      "identity": {
+        "adapter_version": "3426f89a199793772fa8b7b8ecdd397fe0a9902517ca56f2939b6c301210c16c",
+        "context_protocol": "stateless_explicit_noise_v1",
+        "files": [
+          {
+            "bytes": 4507,
+            "path": "assets/physical-intelligence/libero/norm_stats.json",
+            "sha256": "dae37d79a22108af83df9189c6710a3ec8e077d65b28e34bdf1da724e5ae30f1"
+          },
+          {
+            "bytes": 21156,
+            "path": "params/_METADATA",
+            "sha256": "65cc6a84efeb1947131d78a313b8c20bbc95b958c2ba7a41be1a1f523dabf10d"
+          },
+          {
+            "bytes": 12457,
+            "path": "params/_sharding",
+            "sha256": "e1b29e984e147e7c998859ec31b82558f67a30dcdbf5342c869f10f6d8c77783"
+          },
+          {
+            "bytes": 2165,
+            "path": "params/d/5b6b2a896e0651f82a2c879b8a2a8ba8",
+            "sha256": "42198dc6ffc4a30fef05ccd82c103f59d6cc331380580ecb8ee4016b9220def3"
+          },
+          {
+            "bytes": 117,
+            "path": "params/manifest.ocdbt",
+            "sha256": "a62034cfdc5f7b771819ccde16d124f4d2b5527d19206ea148cfb93c7d03ac11"
+          },
+          {
+            "bytes": 1553506716,
+            "path": "params/ocdbt.process_0/d/0ca4bf816ec10acaec0f62490a41529d",
+            "sha256": "c80548576912b015f00c56c789e9e1befcaf18bd8887c56fd4207df7d87e4359"
+          },
+          {
+            "bytes": 5362,
+            "path": "params/ocdbt.process_0/d/15ad1c4fa76e1c764766b9bc865e8d1d",
+            "sha256": "66f72792257fb1d2bad695eb0d011615b731f48342c4eeb5e0cbb6a787181d42"
+          },
+          {
+            "bytes": 2240225020,
+            "path": "params/ocdbt.process_0/d/2e38713b6caa7bfde0385f0adced748d",
+            "sha256": "702499a4edf7fa6b1c9471aeba5d1dca2f10231897676e7b9334d7af47d3d9a9"
+          },
+          {
+            "bytes": 608826847,
+            "path": "params/ocdbt.process_0/d/5b573f911a8101f0fcfdd62f73b218fb",
+            "sha256": "2764a97b179246378b7fdbae46261091e37d04b151b0dbb1f12919be8d678525"
+          },
+          {
+            "bytes": 979384911,
+            "path": "params/ocdbt.process_0/d/5c296f4f9a224be488612a6025ca58c6",
+            "sha256": "282f63599c2a5dba3645d44f259bba23271aaefaf78e2ff8b0e395a094464894"
+          },
+          {
+            "bytes": 126439,
+            "path": "params/ocdbt.process_0/d/680b47b37cc767ff45156e23565e2252",
+            "sha256": "359fc9329c8a3414f0d02d9df0403a60bc36ab00774391647cea3fe7a7567efc"
+          },
+          {
+            "bytes": 2240224527,
+            "path": "params/ocdbt.process_0/d/7a559626d53988daabd96a179a6bff54",
+            "sha256": "ac51652cca71246a431eda2d810c262023030ec929f0e47402e2461c390d45e5"
+          },
+          {
+            "bytes": 132936601,
+            "path": "params/ocdbt.process_0/d/a3bd463a29df7b76a4d71263d8c05704",
+            "sha256": "26d81b3cc53079196d983ae4c7bdee0361de6502eb913b38ff885ebb9bec4d23"
+          },
+          {
+            "bytes": 213,
+            "path": "params/ocdbt.process_0/d/a87389eb66cb14add95ad6441a413ee9",
+            "sha256": "fff2f8b328c86ab34912c01d5758210df1805bcd73e3709be401d1989b9b18c3"
+          },
+          {
+            "bytes": 34975043,
+            "path": "params/ocdbt.process_0/d/cae25c26b881cdb73257fea25bd132a2",
+            "sha256": "70755d54e4edea5a288f717437d2f68456083a620ce95d10d6bd4a4315633a23"
+          },
+          {
+            "bytes": 2240265403,
+            "path": "params/ocdbt.process_0/d/e98fbfe843f0b1a0938e2e174f5fe64b",
+            "sha256": "d9afd99aeb73f1bd60c82d939250c69bddaf76602580c5a5323c0d2a937c642f"
+          },
+          {
+            "bytes": 26171469,
+            "path": "params/ocdbt.process_0/d/f0bdaf7cbb943edbc868f15a685f9881",
+            "sha256": "5abc3ccf4a34e49820f1163ac54c233dd25c4f5d87515a46b378e8d08ed59ff7"
+          },
+          {
+            "bytes": 1957442360,
+            "path": "params/ocdbt.process_0/d/f251f0005f1667fe8e596da96c894e50",
+            "sha256": "3ba9f77400c2459be0a4a6c9c1e4ab28c014ec603c39a292ed9c8f22156cf105"
+          },
+          {
+            "bytes": 575,
+            "path": "params/ocdbt.process_0/manifest.ocdbt",
+            "sha256": "85faf4b9d866fb219df9f905f85ad1131a9f1bf86588540f2a05e623bc94d591"
+          }
+        ],
+        "inference_settings": {
+          "num_steps": 10
+        },
+        "loaded": true,
+        "name": "pi0_libero",
+        "noise_shape": [
+          50,
+          32
+        ],
+        "pi0_source_sha256": "24b32d7c6ed5e409459afa8ca5af96a4dae09c2dcdf48e828907e411f4f12342",
+        "task_id": "paired_fresh_20261007_r2",
+        "weights_fingerprint": "bdd8fb69c6acb52da548566da9d143bc1362b8fac14d744038b6311dc31e8e0c",
+        "weights_path": "/data/chenxiaofu/dual_tasks/dual_disagreement_20260919T064317Z_c5d8c7ad/weights/pi0_libero"
+      },
+      "port": 18772
+    },
+    "main": {
+      "identity": {
+        "adapter_version": "3426f89a199793772fa8b7b8ecdd397fe0a9902517ca56f2939b6c301210c16c",
+        "context_protocol": "stateless_explicit_noise_v1",
+        "files": [
+          {
+            "bytes": 1914,
+            "path": "assets/physical-intelligence/libero/norm_stats.json",
+            "sha256": "b3a44bb2810436fb62917decaea58bd4d9110255df527dea21e8fd40c960bd84"
+          },
+          {
+            "bytes": 23493,
+            "path": "params/_METADATA",
+            "sha256": "303a4e354814928e1d29b75e310f2c1ac7e7e29b62f48395b631045ca1cffc73"
+          },
+          {
+            "bytes": 17952,
+            "path": "params/_sharding",
+            "sha256": "63f4c57ba6ff10f4132a639b9942eabcc26942eb34081be1d93bf7ddab816501"
+          },
+          {
+            "bytes": 9062,
+            "path": "params/array_metadatas/process_0",
+            "sha256": "2b29474f08aa50922da11074deb4d7f35e30f0071a088a30f40df88edc1ebdb0"
+          },
+          {
+            "bytes": 42307,
+            "path": "params/d/98a77a52a8eb845ae4830eb7fe983979",
+            "sha256": "93b39327a1552b06b1b6ce5190d58131297bcca66c3f2a099bbb2882df7759af"
+          },
+          {
+            "bytes": 120,
+            "path": "params/manifest.ocdbt",
+            "sha256": "65246951e69bd2b5118e609646bc9e8c439229bccbc1325643833aeb74f77104"
+          },
+          {
+            "bytes": 2449323387,
+            "path": "params/ocdbt.process_0/d/0eaaecefaa9720d30a32cc56e65fd345",
+            "sha256": "0d4412552d4a69fba953f824a60d005ee7559822a9c1c16684906c7f0801b848"
+          },
+          {
+            "bytes": 2307885530,
+            "path": "params/ocdbt.process_0/d/155391c1cbf93a1be16266de052e5b48",
+            "sha256": "ad09cf4b2cacc0628c713afbb1ee9decfd36e295fdacae111c1e0c5eeeb6cc00"
+          },
+          {
+            "bytes": 1077,
+            "path": "params/ocdbt.process_0/d/2b6985f48e9da86f68627a7608c5bc25",
+            "sha256": "3b81b2e8afe1456a4584d19dcf600f2bb6f27beff9f061b336f06657a11d5cb5"
+          },
+          {
+            "bytes": 2150232827,
+            "path": "params/ocdbt.process_0/d/475fab3ee8821662585a8cde3eb32e22",
+            "sha256": "624a529b0b5f07bf535e07eba4f823e47fdde66a3d0b38295a35ac9d60cfcf0f"
+          },
+          {
+            "bytes": 1608436908,
+            "path": "params/ocdbt.process_0/d/6c54da5a6f62c20a09c0f3f8c3329e00",
+            "sha256": "1a5f80ef1aeaa82e70cca883c4d95da65bd410c8da19729d4814317533ba11f5"
+          },
+          {
+            "bytes": 2240080987,
+            "path": "params/ocdbt.process_0/d/896bf93c5cf2e8ddd274a6ea0a2feec0",
+            "sha256": "c92342da7593219debce6133f148f3c24ece184ff53f9f4bac800c09fcc6dc1a"
+          },
+          {
+            "bytes": 217,
+            "path": "params/ocdbt.process_0/d/bc613ff288a162563e622d01bb60622a",
+            "sha256": "1e99d5876e6b8db2e12c43c8079f6b98cffac2c26bbd84e59cc505e983d146d2"
+          },
+          {
+            "bytes": 2926522,
+            "path": "params/ocdbt.process_0/d/bda87d9791f23df771cd2d15293780cc",
+            "sha256": "9c717ff13084524b74f330803421b8a261bc3009a477c933e1e1a1477a796fc3"
+          },
+          {
+            "bytes": 1680102856,
+            "path": "params/ocdbt.process_0/d/efbb46173882cb35ed41ffe0c2db8a5e",
+            "sha256": "6e62d35e0689dc12779d0b2e65304823d6787fdd4ccd754c9ebd059fdc4b6765"
+          },
+          {
+            "bytes": 322,
+            "path": "params/ocdbt.process_0/manifest.ocdbt",
+            "sha256": "3bf70fbb0fac151675595b33aeb8203139e8809de17d606574ab606a758b3591"
+          }
+        ],
+        "inference_settings": {
+          "num_steps": 10
+        },
+        "loaded": true,
+        "name": "pi05_libero",
+        "noise_shape": [
+          10,
+          32
+        ],
+        "pi0_source_sha256": "24b32d7c6ed5e409459afa8ca5af96a4dae09c2dcdf48e828907e411f4f12342",
+        "task_id": "paired_fresh_20261007_r2",
+        "weights_fingerprint": "25cd8a937bf7430b3b28bf47388e70aa9b6b06b0ef549bf0d7912066dca59f59",
+        "weights_path": "/home/chenxiaofu/.cache/openpi/openpi-assets/checkpoints/pi05_libero/pi05_libero"
+      },
+      "port": 18771
+    }
+  },
+  "action_contracts": {
+    "aux": {
+      "action_offset": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "action_scale": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "control_frequency_hz": 20.0,
+      "controller": "OSC_POSE",
+      "coordinate_frame": "world",
+      "evidence": [
+        "deployed OpenPI policy_config.Unnormalize + full Libero data output transforms; pi0 extra_delta inverse retained",
+        "deployed OSC_POSE delta, input±1/output±0.05m and ±0.5rad, world frame,20Hz",
+        "deployed PandaGripper.format_action -1 open/+1 close; interface mapping probe required"
+      ],
+      "gripper_positive": "close",
+      "gripper_sign": 1,
+      "rotation_representation": "rotation_vector",
+      "semantics": "delta",
+      "units": "normalized_environment_command",
+      "verified": true
+    },
+    "main": {
+      "action_offset": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "action_scale": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "control_frequency_hz": 20.0,
+      "controller": "OSC_POSE",
+      "coordinate_frame": "world",
+      "evidence": [
+        "deployed OpenPI policy_config.Unnormalize + full Libero data output transforms; pi0 extra_delta inverse retained",
+        "deployed OSC_POSE delta, input±1/output±0.05m and ±0.5rad, world frame,20Hz",
+        "deployed PandaGripper.format_action -1 open/+1 close; interface mapping probe required"
+      ],
+      "gripper_positive": "close",
+      "gripper_sign": 1,
+      "rotation_representation": "rotation_vector",
+      "semantics": "delta",
+      "units": "normalized_environment_command",
+      "verified": true
+    }
+  },
+  "scales": {
+    "gripper": 1.0,
+    "rotation": 1.0,
+    "source": "OSC controller max magnitudes: normalized translation=1→0.05m, rotation=1→0.5rad, gripper=1; equal component weight",
+    "translation": 1.0
+  },
+  "d_min": 0.07465353239106164,
+  "numeric_floor": 9.5367431640625e-07,
+  "K": 5,
+  "tasks": {
+    "A": {
+      "bddl": "/home/chenxiaofu/.local/lib/python3.8/site-packages/libero/libero/bddl_files/libero_10/LIVING_ROOM_SCENE2_put_both_the_alphabet_soup_and_the_tomato_sauce_in_the_basket.bddl",
+      "bddl_sha256": "2e661058917f683a25bce480015197f0a2c1911bcbc2b9dd9d947199069c9618",
+      "default_horizon": 520,
+      "family": "composite",
+      "goals": [
+        [
+          "in",
+          "alphabet_soup_1",
+          "basket_1_contain_region"
+        ],
+        [
+          "in",
+          "tomato_sauce_1",
+          "basket_1_contain_region"
+        ]
+      ],
+      "init_file": "/home/chenxiaofu/.local/lib/python3.8/site-packages/libero/libero/init_files/libero_10/LIVING_ROOM_SCENE2_put_both_the_alphabet_soup_and_the_tomato_sauce_in_the_basket.pruned_init",
+      "init_file_sha256": "1899fe54c51e24a41d5f9e32254730d6777f4894ab68e0e873f1fa7ae2062030",
+      "init_state_count": 50,
+      "init_state_id": 0,
+      "initial_states": {
+        "0": {
+          "dtype": "float64",
+          "sha256": "747b653b2ca1feeae8f3bd994880ce743730993ea5ce4bd003623e877f26b3bd",
+          "shape": [
+            123
+          ]
+        },
+        "1": {
+          "dtype": "float64",
+          "sha256": "cf85ed132ae09bfad8798a3126b14879071228e0e2e7bd17c3e9d20e519cdb5a",
+          "shape": [
+            123
+          ]
+        }
+      },
+      "language": "put both the alphabet soup and the tomato sauce in the basket",
+      "limitations": "No ordered subtask detector; physical stationarity only",
+      "name": "LIVING_ROOM_SCENE2_put_both_the_alphabet_soup_and_the_tomato_sauce_in_the_basket",
+      "suite": "libero_10",
+      "support": "generic",
+      "support_scope": "family rules; runtime binding required; efficacy unmeasured",
+      "task_id": 0,
+      "task_order_index": 0
+    },
+    "B": {
+      "bddl": "/home/chenxiaofu/.local/lib/python3.8/site-packages/libero/libero/bddl_files/libero_10/KITCHEN_SCENE6_put_the_yellow_and_white_mug_in_the_microwave_and_close_it.bddl",
+      "bddl_sha256": "456d145f92be049f445fc77673dc583d9d17ea7afe92f6ffcb2fd1fa5565d420",
+      "default_horizon": 520,
+      "family": "composite",
+      "goals": [
+        [
+          "in",
+          "white_yellow_mug_1",
+          "microwave_1_heating_region"
+        ],
+        [
+          "close",
+          "microwave_1"
+        ]
+      ],
+      "init_file": "/home/chenxiaofu/.local/lib/python3.8/site-packages/libero/libero/init_files/libero_10/KITCHEN_SCENE6_put_the_yellow_and_white_mug_in_the_microwave_and_close_it.pruned_init",
+      "init_file_sha256": "6b75c8d4d1e1c40b5d99c78ceea380d99ccffb0a484a4cb2d3153488a0afbbe2",
+      "init_state_count": 50,
+      "init_state_id": 0,
+      "initial_states": {
+        "0": {
+          "dtype": "float64",
+          "sha256": "ea7db2b727794199cfa1e42f8d924c5841e4af18716a392adf30d5517114c87f",
+          "shape": [
+            47
+          ]
+        },
+        "1": {
+          "dtype": "float64",
+          "sha256": "8a1664e433521b5f995c9840cd9d41bf796b38742e57ad57786d67076de8b0cd",
+          "shape": [
+            47
+          ]
+        }
+      },
+      "language": "put the yellow and white mug in the microwave and close it",
+      "limitations": "No ordered subtask detector; physical stationarity only",
+      "name": "KITCHEN_SCENE6_put_the_yellow_and_white_mug_in_the_microwave_and_close_it",
+      "suite": "libero_10",
+      "support": "generic",
+      "support_scope": "family rules; runtime binding required; efficacy unmeasured",
+      "task_id": 9,
+      "task_order_index": 0
+    }
+  },
+  "run_id": "paired_fresh_20261007_r2",
+  "master_seed": 2026100701,
+  "target_candidates": 2,
+  "replicates": 2,
+  "max_gate_attempts_per_root": 12,
+  "max_model_requests": 1600,
+  "max_artifact_bytes": 3221225472,
+  "deadline_epoch": 1791387108.807625,
+  "restoration_acceptance": "/data/chenxiaofu/dual_tasks/state_restoration_final_20261007_common_refresh/evidence/common_refresh/summary.json",
+  "root_sampling": "new live Main proposals; no historical checkpoint or executed-action inputs",
+  "comparison_interval": 10,
+  "replan_interval": 5,
+  "horizon": 520,
+  "warmup_steps": 10,
+  "roots": [
+    {
+      "root_id": "fresh_A_init0",
+      "env_seed": 2026100700,
+      "init_index": 0,
+      "task_label": "A",
+      "task_name": "LIVING_ROOM_SCENE2_put_both_the_alphabet_soup_and_the_tomato_sauce_in_the_basket"
+    },
+    {
+      "root_id": "fresh_A_init1",
+      "env_seed": 2026100701,
+      "init_index": 1,
+      "task_label": "A",
+      "task_name": "LIVING_ROOM_SCENE2_put_both_the_alphabet_soup_and_the_tomato_sauce_in_the_basket"
+    }
+  ],
+  "previous_startup_attempt": "/data/chenxiaofu/dual_tasks/paired_fresh_20261007",
+  "previous_attempt_result": "worker import failed before environment creation or model requests; corrected existing client PYTHONPATH"
+}

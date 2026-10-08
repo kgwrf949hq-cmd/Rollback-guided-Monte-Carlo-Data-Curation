@@ -1,0 +1,15 @@
+# Live runs belong in separate experiment directories.
+*.h5
+*.hdf5
+*.npz
+*.mp4
+*.pkl
+*.pickle
+weights/
+collection/
+pairs/
+evidence/
+run_status.json
+model_requests.jsonl
+experiment_ledger.jsonl
+service_requests.jsonl

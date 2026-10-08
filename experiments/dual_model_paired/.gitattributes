@@ -1,0 +1,2 @@
+# Keep the original evidence CSV bytes (UTF-8 BOM and CRLF) for hash verification.
+results/tables/*.csv -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

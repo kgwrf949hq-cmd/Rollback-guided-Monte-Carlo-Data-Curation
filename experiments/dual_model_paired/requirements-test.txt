@@ -1,0 +1,5 @@
+# Lightweight synthetic regression tests only. Real rollout uses the existing
+# LIBERO/OpenPI environments described in README.md.
+numpy>=1.24
+h5py>=3.8
+pytest>=8

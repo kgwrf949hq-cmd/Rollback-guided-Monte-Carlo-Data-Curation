@@ -1,6 +1,15 @@
 # Rollback-guided Monte Carlo Data Curation
 
-用于 LIBERO/robosuite/MuJoCo 机器人轨迹筛选的 checkpoint/rollback 原型。当前证据支持的准确定位是：在当前 LIBERO/MuJoCo 配置上完成了单任务、短轨迹、原生 `mjSTATE_INTEGRATION` 路径的确定性恢复，并实现了单进程、内存态、预算受限 BFS 的第一版蒙特卡洛 curation coordinator；尚未接入真实 pi0.5 自动分支闭环或数据集 writer，不能称为完整状态系统或优质数据集。
+用于 LIBERO/robosuite/MuJoCo 机器人轨迹筛选的 checkpoint/rollback 原型。
+
+## 双模型配对采集进展（2026-10-08）
+
+已验收的 Main/Aux 配对采集实现、运行说明与结果位于 [experiments/dual_model_paired](experiments/dual_model_paired/README.md)：完整恢复与相同动作 20 步重放通过验收；2 个新候选完成 4 对、8 条完整轨迹。动作分歧超过本轮模型内部采样波动，但 Control/Dual 均为 4/4 成功，尚未证明任务收益或下游训练收益。
+
+- [关键数据与结论](experiments/dual_model_paired/PAIRED_BRANCH_REPORT.md)
+- [终端和 GitHub 网页操作入门](docs/GIT_QUICKSTART_ZH.md)
+
+以下内容描述根目录的早期核心基线：在当前 LIBERO/MuJoCo 配置上完成了单任务、短轨迹、原生 `mjSTATE_INTEGRATION` 路径的确定性恢复，并实现了单进程、内存态、预算受限 BFS 的第一版蒙特卡洛 curation coordinator。该基线尚未接入真实 pi0.5 自动分支闭环或数据集 writer；上述独立试验目录保存了后续已验收的双模型版本。
 
 ## 架构概览
 

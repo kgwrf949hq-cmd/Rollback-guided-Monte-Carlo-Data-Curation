@@ -1,0 +1,108 @@
+{
+  "branches": 8,
+  "checks": [
+    {
+      "actual_action_sources_pass": true,
+      "arm": "control",
+      "candidate_id": "fresh_A_init0_s000120",
+      "checkpoint_hashes_pass": true,
+      "exact_start": true,
+      "replicate": 0,
+      "steps": 126,
+      "trajectory_hash_pass": true,
+      "video_frames": 127,
+      "video_pass": true
+    },
+    {
+      "actual_action_sources_pass": true,
+      "arm": "dual",
+      "candidate_id": "fresh_A_init0_s000120",
+      "checkpoint_hashes_pass": true,
+      "exact_start": true,
+      "replicate": 0,
+      "steps": 126,
+      "trajectory_hash_pass": true,
+      "video_frames": 127,
+      "video_pass": true
+    },
+    {
+      "actual_action_sources_pass": true,
+      "arm": "control",
+      "candidate_id": "fresh_A_init0_s000120",
+      "checkpoint_hashes_pass": true,
+      "exact_start": true,
+      "replicate": 1,
+      "steps": 178,
+      "trajectory_hash_pass": true,
+      "video_frames": 179,
+      "video_pass": true
+    },
+    {
+      "actual_action_sources_pass": true,
+      "arm": "dual",
+      "candidate_id": "fresh_A_init0_s000120",
+      "checkpoint_hashes_pass": true,
+      "exact_start": true,
+      "replicate": 1,
+      "steps": 153,
+      "trajectory_hash_pass": true,
+      "video_frames": 154,
+      "video_pass": true
+    },
+    {
+      "actual_action_sources_pass": true,
+      "arm": "control",
+      "candidate_id": "fresh_A_init1_s000050",
+      "checkpoint_hashes_pass": true,
+      "exact_start": true,
+      "replicate": 0,
+      "steps": 226,
+      "trajectory_hash_pass": true,
+      "video_frames": 227,
+      "video_pass": true
+    },
+    {
+      "actual_action_sources_pass": true,
+      "arm": "dual",
+      "candidate_id": "fresh_A_init1_s000050",
+      "checkpoint_hashes_pass": true,
+      "exact_start": true,
+      "replicate": 0,
+      "steps": 233,
+      "trajectory_hash_pass": true,
+      "video_frames": 234,
+      "video_pass": true
+    },
+    {
+      "actual_action_sources_pass": true,
+      "arm": "control",
+      "candidate_id": "fresh_A_init1_s000050",
+      "checkpoint_hashes_pass": true,
+      "exact_start": true,
+      "replicate": 1,
+      "steps": 232,
+      "trajectory_hash_pass": true,
+      "video_frames": 233,
+      "video_pass": true
+    },
+    {
+      "actual_action_sources_pass": true,
+      "arm": "dual",
+      "candidate_id": "fresh_A_init1_s000050",
+      "checkpoint_hashes_pass": true,
+      "exact_start": true,
+      "replicate": 1,
+      "steps": 220,
+      "trajectory_hash_pass": true,
+      "video_frames": 221,
+      "video_pass": true
+    }
+  ],
+  "main_seeds_matched_after_handoff": true,
+  "original_source_unchanged": true,
+  "owned_services_stopped": true,
+  "pairs": 4,
+  "same_checkpoint_verified": true,
+  "serialized_initial_states_exact": true,
+  "status": "PASS"
+}

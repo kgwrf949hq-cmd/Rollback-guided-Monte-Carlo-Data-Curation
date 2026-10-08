@@ -1,0 +1,122 @@
+{
+  "exact_equal": true,
+  "final_equal": true,
+  "first_mismatch_offset": null,
+  "fresh_process_vs_reference": true,
+  "initial_equal": true,
+  "normalized_initial_differences": [],
+  "normalized_initial_exact": true,
+  "pid": 1370796,
+  "reference_pid": 1368054,
+  "replay_20_steps_exact": true,
+  "rows": [
+    {
+      "differences": [],
+      "equal": true,
+      "offset": 0
+    },
+    {
+      "differences": [],
+      "equal": true,
+      "offset": 1
+    },
+    {
+      "differences": [],
+      "equal": true,
+      "offset": 2
+    },
+    {
+      "differences": [],
+      "equal": true,
+      "offset": 3
+    },
+    {
+      "differences": [],
+      "equal": true,
+      "offset": 4
+    },
+    {
+      "differences": [],
+      "equal": true,
+      "offset": 5
+    },
+    {
+      "differences": [],
+      "equal": true,
+      "offset": 6
+    },
+    {
+      "differences": [],
+      "equal": true,
+      "offset": 7
+    },
+    {
+      "differences": [],
+      "equal": true,
+      "offset": 8
+    },
+    {
+      "differences": [],
+      "equal": true,
+      "offset": 9
+    },
+    {
+      "differences": [],
+      "equal": true,
+      "offset": 10
+    },
+    {
+      "differences": [],
+      "equal": true,
+      "offset": 11
+    },
+    {
+      "differences": [],
+      "equal": true,
+      "offset": 12
+    },
+    {
+      "differences": [],
+      "equal": true,
+      "offset": 13
+    },
+    {
+      "differences": [],
+      "equal": true,
+      "offset": 14
+    },
+    {
+      "differences": [],
+      "equal": true,
+      "offset": 15
+    },
+    {
+      "differences": [],
+      "equal": true,
+      "offset": 16
+    },
+    {
+      "differences": [],
+      "equal": true,
+      "offset": 17
+    },
+    {
+      "differences": [],
+      "equal": true,
+      "offset": 18
+    },
+    {
+      "differences": [],
+      "equal": true,
+      "offset": 19
+    },
+    {
+      "differences": [],
+      "equal": true,
+      "offset": 20
+    }
+  ],
+  "status": "PASS",
+  "steps": 20,
+  "terminal_flags_exact": true
+}

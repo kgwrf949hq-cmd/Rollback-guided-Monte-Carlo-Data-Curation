@@ -1,0 +1,17 @@
+﻿candidate,replicate,arm,goal_index,goal,first_true_step,true_to_false_count
+C1,0,control,0,alphabet_soup_in_basket,16,0
+C1,0,control,1,tomato_sauce_in_basket,126,0
+C1,0,dual,0,alphabet_soup_in_basket,18,0
+C1,0,dual,1,tomato_sauce_in_basket,126,0
+C1,1,control,0,alphabet_soup_in_basket,23,0
+C1,1,control,1,tomato_sauce_in_basket,178,0
+C1,1,dual,0,alphabet_soup_in_basket,23,0
+C1,1,dual,1,tomato_sauce_in_basket,153,0
+C2,0,control,0,alphabet_soup_in_basket,100,0
+C2,0,control,1,tomato_sauce_in_basket,226,0
+C2,0,dual,0,alphabet_soup_in_basket,94,0
+C2,0,dual,1,tomato_sauce_in_basket,233,0
+C2,1,control,0,alphabet_soup_in_basket,91,0
+C2,1,control,1,tomato_sauce_in_basket,232,0
+C2,1,dual,0,alphabet_soup_in_basket,83,0
+C2,1,dual,1,tomato_sauce_in_basket,220,0

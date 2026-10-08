@@ -1,0 +1,46 @@
+{
+  "cases": [
+    {
+      "cross_process_returncode": 0,
+      "cross_process_status": "PASS",
+      "final_exact": true,
+      "initial_exact": true,
+      "replay_20_steps_exact": true,
+      "root_id": "A_init1",
+      "same_process_status": "PASS",
+      "terminal_flags_exact": true
+    },
+    {
+      "cross_process_returncode": 0,
+      "cross_process_status": "PASS",
+      "final_exact": true,
+      "initial_exact": true,
+      "replay_20_steps_exact": true,
+      "root_id": "B_init0",
+      "same_process_status": "PASS",
+      "terminal_flags_exact": true
+    }
+  ],
+  "code_sha256": {
+    "code/dual_observation.py": "e234549d32a7e84dbc3f4c102c97be80faa1e26b995c0f6f18a4ac2dee0c5ecd",
+    "code/dual_runtime.py": "5e575cf620aeec00055b9ac1e64a1ad04c25ce45a893c6649a599bf603dafd57",
+    "code/libero_rollback_tool.py": "8862b77c16a88ad53ffd54ef1396a70f31450bd50893fb14665225b34c28d018"
+  },
+  "compared_replay_transitions": 80,
+  "environment_steps": 365,
+  "exact_comparison": true,
+  "model_calls": 0,
+  "previous_results_sha256": "c85f048e2188181baf3164ac6373d67575bf4d87a32671910ac638e4fb575a30",
+  "protocol": [
+    "sim.forward()",
+    "controller.new_update=True; controller.update(force=True)",
+    "observation_owner._obs_cache={}",
+    "observation_owner._get_observations(force_update=True)"
+  ],
+  "saver_modified": false,
+  "saver_unchanged": true,
+  "source": "/data/chenxiaofu/dual_tasks/state_saver_audit_20261007",
+  "status": "PASS",
+  "terminal_scope": "done/success/task-progress flags at all 20 replay steps; no claim of full-episode terminal coverage",
+  "tolerance": 0
+}
